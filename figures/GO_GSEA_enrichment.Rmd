@@ -1,0 +1,350 @@
+---
+title: "Figures for paper GO GSEA"
+author: "Kanako Terakawa"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Figure 4B-C}
+# GO Enrichment analysis
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+library(dplyr)
+
+# Settings
+csv_alll <- "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD/EdgeR_HighCoupling_vs_Reference_all_20260512_124736.csv"
+csv_sig <- "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD/EdgeR_HighCoupling_vs_Reference_FDR0.05_20260512_124736.csv"
+
+outdir    <- "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD/GO/"
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+SIMPLIFY_CUTOFF <- 0.7
+TOP_N           <- 10
+
+# Data loading from csv files
+all_results <- read.csv(csv_alll, row.names = 1)
+sig_genes   <- read.csv(csv_sig, row.names = 1)
+
+cat("--- Loaded from CSV ---\n")
+cat("all_results :", nrow(all_results), "genes\n")
+cat("sig_genes   :", nrow(sig_genes),   "genes (FDR < 0.05)\n")
+cat("  Up   (logFC > 0):", sum(sig_genes$logFC > 0), "\n")
+cat("  Down (logFC < 0):", sum(sig_genes$logFC < 0), "\n\n")
+
+required_cols <- c("logFC", "FDR")
+miss_all <- setdiff(required_cols, colnames(all_results))
+miss_sig <- setdiff(required_cols, colnames(sig_genes))
+if (length(miss_all) > 0) stop("all_results missing: ", paste(miss_all, collapse = ", "))
+if (length(miss_sig) > 0) stop("sig_genes missing: ",   paste(miss_sig, collapse = ", "))
+
+# Creating Universe
+all_genes_tested <- rownames(all_results)
+cat("--- Universe construction ---\n")
+cat("Total tested genes :", length(all_genes_tested), "\n")
+
+universe_df <- bitr(
+  all_genes_tested,
+  fromType = "SYMBOL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)
+valid_universe <- unique(universe_df$ENTREZID)
+cat("Mapped to ENTREZID :", length(valid_universe), "\n")
+cat("Conversion rate    :",
+    round(length(valid_universe) / length(all_genes_tested) * 100, 1), "%\n\n")
+
+# GP BP Upregulated
+sig_up <- subset(sig_genes, logFC > 0)
+cat("Upregulated DEGs for GO :", nrow(sig_up), "\n")
+
+target_up <- bitr(
+  rownames(sig_up),
+  fromType = "SYMBOL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)$ENTREZID
+
+go_up <- enrichGO(
+  gene          = target_up,
+  universe      = valid_universe,
+  OrgDb         = org.Hs.eg.db,
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE
+)
+
+# GO BP Downregulated
+sig_down <- subset(sig_genes, logFC < 0)
+cat("Downregulated DEGs for GO :", nrow(sig_down), "\n")
+
+target_down <- bitr(
+  rownames(sig_down),
+  fromType = "SYMBOL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)$ENTREZID
+
+go_down <- enrichGO(
+  gene          = target_down,
+  universe      = valid_universe,
+  OrgDb         = org.Hs.eg.db,
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE
+)
+
+# Simplify (semantic similarity)
+#   - cutoff = 0.7
+#   - select_fun = min
+cat("--- Simplifying (cutoff =", SIMPLIFY_CUTOFF, ") ---\n")
+
+if (!is.null(go_up) && nrow(go_up@result) > 0) {
+  go_up_s <- clusterProfiler::simplify(
+    go_up,
+    cutoff      = SIMPLIFY_CUTOFF,
+    by          = "p.adjust",
+    select_fun  = min
+  )
+  cat("UP   : ", nrow(go_up@result),   "->", nrow(go_up_s@result),
+      " (", nrow(go_up@result) - nrow(go_up_s@result),  "merged)\n")
+} else {
+  go_up_s <- NULL
+}
+
+if (!is.null(go_down) && nrow(go_down@result) > 0) {
+  go_down_s <- clusterProfiler::simplify(
+    go_down,
+    cutoff      = SIMPLIFY_CUTOFF,
+    by          = "p.adjust",
+    select_fun  = min
+  )
+  cat("DOWN : ", nrow(go_down@result), "->", nrow(go_down_s@result),
+      " (", nrow(go_down@result) - nrow(go_down_s@result), "merged)\n\n")
+} else {
+  go_down_s <- NULL
+}
+
+# Result summary
+n_up_raw   <- if (!is.null(go_up))   sum(go_up@result$p.adjust   < 0.05) else 0
+n_down_raw <- if (!is.null(go_down)) sum(go_down@result$p.adjust < 0.05) else 0
+n_up_s     <- if (!is.null(go_up_s))   sum(go_up_s@result$p.adjust   < 0.05) else 0
+n_down_s   <- if (!is.null(go_down_s)) sum(go_down_s@result$p.adjust < 0.05) else 0
+cat("=== GO BP Enrichment (p.adj < 0.05) ===\n")
+cat("Upregulated   : raw =", n_up_raw,   " / simplified =", n_up_s,   "\n")
+cat("Downregulated : raw =", n_down_raw, " / simplified =", n_down_s, "\n\n")
+
+# Custom GO dotplot
+make_go_dotplot <- function(go_result, top_n = 10,
+                            colors,
+                            title = "") {
+  df <- go_result@result %>%
+    dplyr::arrange(p.adjust) %>%               # ascending by p.adjust
+    dplyr::slice_head(n = top_n) %>%
+    dplyr::mutate(
+      Description = paste0(
+        toupper(substr(Description, 1, 1)),
+        substring(Description, 2)
+      ),
+      Description = factor(Description, levels = rev(Description)),
+      GeneRatio_num = sapply(GeneRatio, function(x) {
+        parts <- as.numeric(strsplit(x, "/")[[1]])
+        parts[1] / parts[2]
+      })
+    )
+  
+  ggplot(df, aes(x = GeneRatio_num, y = Description,
+                 color = p.adjust, size = Count)) +
+    geom_point() +
+    scale_color_gradientn(
+      colors = colors,
+      name   = "p.adjust"
+    ) +
+    scale_size_continuous(range = c(3, 8), name = "Count") +
+    labs(x = "GeneRatio", y = NULL, title = title) +
+    guides(                                                   
+      color = guide_colorbar(
+        reverse    = TRUE,
+        barheight  = unit(4, "cm"),
+        order      = 1                                      
+      ),
+      size  = guide_legend(order = 2)                      
+    ) +
+    theme_bw() +
+    theme(
+      plot.title    = element_text(size = 16, face = "bold"),    
+      axis.title.x  = element_text(size = 15, face = "bold"),    
+      axis.text.x   = element_text(size = 13, color = "black"),  
+      axis.text.y   = element_text(size = 13, color = "black"),  
+      legend.title  = element_text(size = 12),
+      legend.text   = element_text(size = 11)
+    )
+}
+
+# Dotplot
+
+# --- Up---
+if (!is.null(go_up_s) && nrow(go_up_s@result) > 0) {
+  p_up <- make_go_dotplot(
+    go_up_s,
+    top_n  = TOP_N,
+    colors = c("#67000D",   
+               "#CB181D",
+               "#FB6A4A",
+               "#FCBBA1"), 
+  )
+  
+  print(p_up)
+  
+  ggsave(
+    file.path(outdir, paste0("GO_BP_Up_Dotplot_", timestamp, ".png")),
+    p_up, width = 8, height = 7, dpi = 600
+  )
+  ggsave(
+    file.path(outdir, paste0("GO_BP_Up_Dotplot_", timestamp, ".pdf")),
+    p_up, width = 8, height = 7, device = cairo_pdf
+  )
+  
+}
+
+# --- Down ---
+if (!is.null(go_down_s) && nrow(go_down_s@result) > 0) {
+  p_down <- make_go_dotplot(
+    go_down_s,
+    top_n  = TOP_N,
+    colors = c("#08306B",  
+               "#2171B5",
+               "#4292C6",
+               "#9ECAE1"),  
+  )
+  
+  print(p_down)
+  
+  ggsave(
+    file.path(outdir, paste0("GO_BP_Down_Dotplot_", timestamp, ".png")),
+    p_down, width = 8, height = 7, dpi = 600
+  )
+  ggsave(
+    file.path(outdir, paste0("GO_BP_Down_Dotplot_", timestamp, ".pdf")),
+    p_down, width = 8, height = 7, device = cairo_pdf
+  )
+  
+}
+
+cat("GO enrichment outputs saved to:", outdir, "\n")
+```
+
+```{r Figure 2E}
+library(dplyr)
+library(fgsea)
+library(msigdbr)
+library(stringr)
+
+csv_all <- read.csv(
+  "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD/EdgeR_HighCoupling_vs_Reference_all_20260512_124736.csv"
+)
+
+csv_all <- csv_all %>%
+  dplyr::rename(gene_name = X)
+
+# GSEA ranking metric 
+res_rank <- csv_all %>%
+  dplyr::filter(
+    !is.na(gene_name),
+    gene_name != "",
+    !is.na(logFC),
+    !is.na(F)
+  ) %>%
+  dplyr::mutate(
+    rank_metric = sign(logFC) * sqrt(pmax(F, 0))
+  ) %>%
+  dplyr::group_by(gene_name) %>%
+  # for duplicate gene symbols, keep the rank with the largest absolute value
+  dplyr::slice_max(
+    order_by = abs(rank_metric),
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(gene_name, rank_metric)
+
+ranks <- res_rank$rank_metric
+names(ranks) <- res_rank$gene_name
+
+# break ties
+set.seed(42)
+ranks <- ranks + rnorm(length(ranks), sd = 1e-10)
+
+# sort descending for fgsea
+ranks <- sort(ranks, decreasing = TRUE)
+
+# load Hallmark gene sets
+msig_h <- msigdbr(
+  species  = "Homo sapiens",
+  category = "H"
+) %>%
+  dplyr::select(gs_name, gene_symbol)
+
+# convert to a list for fgsea
+pathways <- split(msig_h$gene_symbol, msig_h$gs_name)
+
+# check
+length(pathways)
+head(names(pathways))
+
+fgseaRes <- fgsea(pathways = pathways, stats = ranks, minSize = 15, maxSize = 500)
+
+table(is.na(csv_all$F))
+summary(res_rank$rank_metric)
+fgseaRes_sig <- fgseaRes[fgseaRes$padj < 0.05, ]
+print(fgseaRes_sig)
+
+# select the most relevant among the significant pathways
+# (show the top ~12 by absolute NES)
+plot_pathways <- fgseaRes_sig %>%
+  arrange(desc(abs(NES))) %>%
+  head(12) 
+
+
+plot_pathways <- plot_pathways %>%
+  mutate(
+    pathway_label = pathway %>%
+      str_remove("^HALLMARK_") %>%
+      str_replace_all("_", " ") %>%
+      str_to_lower() %>%
+      str_to_sentence()
+  )
+
+p <- ggplot(plot_pathways, aes(x = reorder(pathway_label, NES), y = NES, fill = NES > 0)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  coord_flip() +
+  geom_text(aes(label = ifelse(padj < 0.05, "*", "")), 
+            hjust = ifelse(plot_pathways$NES > 0, -0.3, 1.3), 
+            vjust = 0.8, size = 8) +
+  scale_fill_manual(values = c("TRUE" = "#e64b35ff", "FALSE" = "#3182bd")) +
+  theme_minimal() +
+  labs(x = "", y = "Normalized Enrichment Score (NES)") +
+  theme(axis.text.y = element_text(size = 10, face = "bold"),
+        axis.text.x  = element_text(size = 14),
+      axis.title.x = element_text(size = 14),
+        legend.position = "none")
+
+print(p)
+
+  ggsave(
+    file.path(outdir, paste0("GSEA_Barplot_", timestamp, ".png")),
+    p, width = 8, height = 7, dpi = 600
+  )
+```
+
+
+

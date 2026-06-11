@@ -1,0 +1,1915 @@
+---
+title: "Spatial Plot"
+author: "Kanako Terakawa"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Fig2A-D_panels}
+# Fig2A-D Spatial 4-panel plot
+# Proof-of-concept cohort
+# H&E background + spatial spots
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+  library(tibble)
+  library(patchwork)
+  library(grid)
+  library(scales)
+  library(viridis)
+  library(abind)
+})
+
+# Settings
+
+valid_samples <- c("HK2529_ST", "HK2877_ST", "HK2844_ST")
+
+out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/Proof-of-Concept cohort/"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+# Display settings
+
+HE_ALPHA <- 0.4
+
+SHOW_PANEL_TITLES <- FALSE   # TRUE to show each panel title (pA-pD)
+SHOW_FIGURE_TITLE <- TRUE    # TRUE to show the sample name on top
+
+TITLE_FONT <- "Arial"
+LEG_FONT   <- "Arial"
+
+TITLE_SIZE     <- 24
+FIG_TITLE_SIZE <- 16
+
+LEG_TITLE_SIZE <- 20
+LEG_TEXT_SIZE  <- 20
+
+CBAR_HEIGHT <- 4.1  # color bar height, cm
+CBAR_WIDTH  <- 0.7  # color bar width, cm
+LEG_KEY     <- 1.1  # discrete legend key size, cm
+LEG_DOT_SIZE <- 8
+
+LEG_TITLE_GAP <- 16
+PANEL_HGAP    <- 14
+
+NA_BORDER_COL <- "#999999"
+NA_BORDER_W   <- 1.5
+
+DOT_SIZE <- 1.4
+GWR_COEF_CAP <- 5
+
+# Image -> Sample lookup
+
+img_sample_map <- data.frame(
+  image = Images(susz),
+  sample = sapply(Images(susz), function(img) {
+    unique(
+      susz$orig.ident[
+        colnames(susz) %in% rownames(susz@images[[img]]@coordinates)
+      ]
+    )[1]
+  }),
+  stringsAsFactors = FALSE
+)
+
+print(img_sample_map)
+
+# Spot label
+
+susz$Spot_Label <- ifelse(
+  !is.na(susz$M2_Coeff) & susz$M2_Coeff > 0 & susz$M2_AdjP < 0.05,
+  "High-coupling",
+  "Reference"
+)
+
+susz$Spot_Label[is.na(susz$M2_Coeff)] <- "NA"
+
+susz$Spot_Label <- factor(
+  susz$Spot_Label,
+  levels = c("High-coupling", "Reference", "NA")
+)
+
+# Color palettes
+
+m2_palette <- function(n = 100) {
+  viridis::rocket(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+fib_palette <- function(n = 100) {
+  viridis::mako(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+gwr_diverging <- c(
+  "#08519C", "#4292C6", "#9ECAE1",
+  "#FFEDA0",
+  "#FEB24C", "#FD8D3C", "#E31A1C"
+)
+
+hc_cols <- c(
+  "High-coupling" = "#D55E00",
+  "Reference"     = "#666666",
+  "NA"            = "#DDDDDD"
+)
+
+# H&E layer helper
+
+get_HE_layer <- function(obj, img_name, alpha = HE_ALPHA) {
+  
+  img_array <- obj@images[[img_name]]@image
+  
+  if (is.null(img_array)) {
+    warning(paste("No image array for", img_name))
+    return(NULL)
+  }
+  
+  cat("    H&E array dim:", dim(img_array), "\n")
+  
+  # RGB -> RGBA
+  if (length(dim(img_array)) == 3 && dim(img_array)[3] == 3) {
+    alpha_layer <- array(
+      alpha,
+      dim = c(dim(img_array)[1], dim(img_array)[2], 1)
+    )
+    img_array <- abind::abind(img_array, alpha_layer, along = 3)
+  }
+  
+  list(
+    grob   = grid::rasterGrob(img_array, interpolate = TRUE),
+    height = dim(img_array)[1],
+    width  = dim(img_array)[2]
+  )
+}
+
+# Continuous spatial panel
+
+make_panel <- function(coords_s,
+                       HE_info,
+                       feature,
+                       palette_fn,
+                       lim,
+                       title,
+                       color_label,
+                       oob_method = scales::squish) {
+  
+  p <- ggplot(
+    coords_s,
+    aes(x = imagecol, y = -imagerow, color = .data[[feature]])
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.9) +
+    scale_color_gradientn(
+      colors = palette_fn,
+      limits = lim,
+      oob = oob_method,
+      na.value = "#DDDDDD"
+    ) +
+    guides(
+      color = guide_colorbar(
+        barheight = unit(CBAR_HEIGHT, "cm"),
+        barwidth  = unit(CBAR_WIDTH, "cm"),
+        title.position = "top"
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) title else NULL,
+      color = color_label
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = TITLE_SIZE,
+          family = TITLE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.title = element_text(
+        size = LEG_TITLE_SIZE,
+        face = "bold",
+        family = LEG_FONT,
+        margin = margin(b = LEG_TITLE_GAP)
+      ),
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = LEG_FONT
+      ),
+      legend.key.height = unit(CBAR_HEIGHT, "cm")
+    )
+  
+  return(p)
+}
+
+# Discrete high-coupling panel
+
+make_high_coupling_panel <- function(coords_s,
+                                     HE_info,
+                                     n_hc) {
+  
+  coords_ordered <- coords_s %>%
+    arrange(Spot_Label == "High-coupling")
+  
+  p <- ggplot(
+    coords_ordered,
+    aes(x = imagecol, y = -imagerow, color = Spot_Label)
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.95) +
+    scale_color_manual(
+      values = hc_cols,
+      na.value = "#999999",
+      drop = FALSE
+    ) +
+    guides(
+      color = guide_legend(
+        override.aes = list(
+          shape  = c(16, 16, 21),
+          colour = c("#D55E00", "#666666", NA_BORDER_COL),
+          fill = c("#D55E00", "#666666", "#F7F7F7"),
+          stroke = c(0, 0, NA_BORDER_W),
+          size   = LEG_DOT_SIZE
+        )
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) {
+        paste0("High-coupling Spots (n = ", n_hc, ")")
+      } else {
+        NULL
+      },
+      color = NULL
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = TITLE_SIZE,
+          family = TITLE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = LEG_FONT
+      ),
+      legend.key.height = unit(LEG_KEY, "cm"),
+      legend.key.width  = unit(LEG_KEY, "cm")
+    )
+  
+  return(p)
+}
+
+# Main loop
+
+for (target_sample in valid_samples) {
+  
+  cat("\nGenerating:", target_sample, "\n")
+  
+  img <- img_sample_map$image[img_sample_map$sample == target_sample]
+  
+  if (length(img) == 0) {
+    cat("  No image - skipping\n")
+    next
+  }
+  
+  img <- img[1]
+  cat("  Image:", img, "\n")
+  
+  HE_info <- get_HE_layer(susz, img, alpha = HE_ALPHA)
+  
+  coords_s <- GetTissueCoordinates(susz, image = img) %>%
+    rownames_to_column("Barcode") %>%
+    left_join(
+      susz@meta.data %>%
+        rownames_to_column("Barcode") %>%
+        dplyr::select(
+          Barcode,
+          M2Mac_fraction,
+          Fibrosis_Score,
+          M2_Coeff,
+          M2_AdjP,
+          Spot_Label
+        ),
+      by = "Barcode"
+    )
+  
+  n_hc <- sum(coords_s$Spot_Label == "High-coupling", na.rm = TRUE)
+  
+  # Per-sample color limits
+  
+  m2_vals <- coords_s$M2Mac_fraction[!is.na(coords_s$M2Mac_fraction)]
+  
+  m2_lim_hi <- if (length(m2_vals) > 0) {
+    quantile(m2_vals, 0.90, na.rm = TRUE)
+  } else {
+    1
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- max(m2_vals, na.rm = TRUE)
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- 1e-6
+  }
+  
+  fib_vals <- coords_s$Fibrosis_Score[!is.na(coords_s$Fibrosis_Score)]
+  
+  fib_lim_lo <- quantile(fib_vals, 0.10, na.rm = TRUE)
+  fib_lim_hi <- quantile(fib_vals, 0.90, na.rm = TRUE)
+  
+  if (is.na(fib_lim_lo) || is.na(fib_lim_hi) || fib_lim_lo == fib_lim_hi) {
+    fib_lim_lo <- min(fib_vals, na.rm = TRUE)
+    fib_lim_hi <- max(fib_vals, na.rm = TRUE)
+  }
+  
+  # Four panels
+  
+  pA <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "M2Mac_fraction",
+    palette_fn = m2_palette(100),
+    lim        = c(0, m2_lim_hi),
+    title      = paste0("M2 Macrophage Score (0–", round(m2_lim_hi, 3), ")"),
+    color_label = "M2Mac"
+  )
+  
+  pB <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "Fibrosis_Score",
+    palette_fn = fib_palette(100),
+    lim        = c(fib_lim_lo, fib_lim_hi),
+    title      = paste0(
+      "Fibrosis Score (",
+      round(fib_lim_lo, 2), "–", round(fib_lim_hi, 2), ")"
+    ),
+    color_label = "Fibrosis"
+  )
+  
+  pC <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "M2_Coeff",
+    palette_fn = gwr_diverging,
+    lim        = c(-GWR_COEF_CAP, GWR_COEF_CAP),
+    title      = paste0("GWR Coefficient (±", GWR_COEF_CAP, ")"),
+    color_label = "Coeff"
+  )
+  
+  pD <- make_high_coupling_panel(
+    coords_s = coords_s,
+    HE_info  = HE_info,
+    n_hc     = n_hc
+  )
+  
+  # Combine panels
+  
+  fig_map <- (pA | pB) / (pC | pD)
+  
+  if (SHOW_FIGURE_TITLE) {
+    fig_map <- fig_map +
+      plot_annotation(
+        title = target_sample,
+        theme = theme(
+          plot.title = element_text(
+            hjust = 0.5,
+            face = "bold",
+            size = FIG_TITLE_SIZE,
+            family = TITLE_FONT
+          )
+        )
+      )
+  }
+  
+  fig_map <- fig_map &
+    theme(
+      plot.margin = margin(
+        t = 4,
+        r = PANEL_HGAP,
+        b = 4,
+        l = PANEL_HGAP
+      )
+    )
+  
+  print(fig_map)
+  
+  # Save
+  
+  file_base <- file.path(
+    out_dir,
+    paste0(
+      "Spatial_4panel_",
+      target_sample,
+      "_v8_HE_noPanelTitle_",
+      timestamp
+    )
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".pdf"),
+    plot = fig_map,
+    width = 16,
+    height = 13,
+    units = "in",
+    device = cairo_pdf
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".png"),
+    plot = fig_map,
+    width = 16,
+    height = 13,
+    units = "in",
+    dpi = 300,
+    bg = "white"
+  )
+  
+  cat("  ✓ Saved:", file_base, "\n")
+}
+```
+
+```{r Figure_4_KPMP_DKD_Spatial_v11}
+# Figure 4: KPMP DKD Spatial Plot v11
+#   Base: v9 working script
+#   - Keeps VisiumV2 x/y swap + auto-rescale
+#   - Keeps H&E background and adaptive 2x2 / 1x4 layout
+#   - Optional panel titles
+#   - Larger Arial legends
+#   - Visible NA legend circle
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(patchwork)
+  library(scales)
+  library(viridis)
+  library(dplyr)
+  library(tibble)
+  library(grid)
+  library(abind)
+})
+
+# Settings
+
+SEURAT_OBJ <- merged_seurat
+
+valid_samples <- c(
+  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
+  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
+  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
+)
+ 
+out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# ---------- Plot appearance ----------
+HE_ALPHA         <- 0.4
+DOT_SIZE         <- 2.0
+GWR_COEF_CAP     <- 5
+ASPECT_THRESHOLD <- 1.5
+
+SHOW_PANEL_TITLES <- FALSE   # TRUE to show each panel title (pA-pD)
+SHOW_SAMPLE_TITLE  <- TRUE    # TRUE to show the sample name at the top
+
+BASE_FONT <- "Arial"
+
+PANEL_TITLE_SIZE <- 12
+SAMPLE_TITLE_SIZE <- 20
+
+LEG_TEXT_SIZE  <- 20
+LEG_TITLE_SIZE <- 20
+LEG_KEY_SIZE   <- 1.2
+LEG_DOT_SIZE   <- 7
+
+CBAR_HEIGHT <- 2.5
+CBAR_WIDTH  <- 0.50
+
+NA_BORDER_COL <- "#666666"
+NA_BORDER_W   <- 1.8
+
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+# VisiumV2 x/y swap + auto-rescale
+
+get_coords_std <- function(obj, img_name) {
+  
+  coords_raw <- GetTissueCoordinates(obj, image = img_name)
+  
+  if ("cell" %in% colnames(coords_raw)) {
+    # VisiumV2 format
+    # Important: x/y swap is needed for this object
+    coords <- data.frame(
+      Barcode  = coords_raw$cell,
+      imagecol = coords_raw$y,
+      imagerow = coords_raw$x,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    # VisiumV1-like format
+    coords <- data.frame(
+      Barcode  = rownames(coords_raw),
+      imagecol = coords_raw$imagecol,
+      imagerow = coords_raw$imagerow,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Auto-rescale if coordinates are much larger than the H&E image size
+  img_array <- obj@images[[img_name]]@image
+  
+  if (!is.null(img_array)) {
+    img_w   <- dim(img_array)[2]
+    max_col <- max(coords$imagecol, na.rm = TRUE)
+    
+    if (max_col > img_w * 1.5) {
+      sf <- obj@images[[img_name]]@scale.factors
+      
+      scale_factor <- if (!is.null(sf$lowres)) {
+        sf$lowres
+      } else {
+        img_w / max_col * 0.95
+      }
+      
+      coords$imagecol <- coords$imagecol * scale_factor
+      coords$imagerow <- coords$imagerow * scale_factor
+      
+      cat("    [Auto-rescale: ×", round(scale_factor, 4), "]\n", sep = "")
+    }
+  }
+  
+  return(coords)
+}
+
+# Image -> Sample lookup
+
+img_sample_map <- data.frame(
+  image = Images(SEURAT_OBJ),
+  sample = sapply(Images(SEURAT_OBJ), function(img) {
+    coords_raw <- GetTissueCoordinates(SEURAT_OBJ, image = img)
+    barcodes <- if ("cell" %in% colnames(coords_raw)) {
+      coords_raw$cell
+    } else {
+      rownames(coords_raw)
+    }
+    unique(SEURAT_OBJ$orig.ident[colnames(SEURAT_OBJ) %in% barcodes])[1]
+  }),
+  stringsAsFactors = FALSE
+)
+
+print(img_sample_map)
+
+# Spot labels
+
+SEURAT_OBJ$Spot_Label <- ifelse(
+  !is.na(SEURAT_OBJ$M2_Coeff) &
+    SEURAT_OBJ$M2_Coeff > 0 &
+    SEURAT_OBJ$M2_AdjP < 0.05,
+  "High-coupling",
+  "Reference"
+)
+
+SEURAT_OBJ$Spot_Label[is.na(SEURAT_OBJ$M2_Coeff)] <- "NA"
+
+SEURAT_OBJ$Spot_Label <- factor(
+  SEURAT_OBJ$Spot_Label,
+  levels = c("High-coupling", "Reference", "NA")
+)
+
+# Color palettes
+
+m2_palette <- function(n = 100) {
+  viridis::rocket(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+fib_palette <- function(n = 100) {
+  viridis::mako(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+gwr_diverging <- c(
+  "#08519C", "#4292C6", "#9ECAE1",
+  "#FFEDA0",
+  "#FEB24C", "#FD8D3C", "#E31A1C"
+)
+
+hc_cols <- c(
+  "High-coupling" = "#D55E00",
+  "Reference"     = "#666666",
+  "NA"            = "#DDDDDD"
+)
+
+# H&E layer
+
+get_HE_layer <- function(obj, img_name, alpha = HE_ALPHA) {
+  
+  img_array <- obj@images[[img_name]]@image
+  
+  if (is.null(img_array)) {
+    warning(paste("No H&E image array for", img_name))
+    return(NULL)
+  }
+  
+  cat("    H&E array dim:", paste(dim(img_array), collapse = " x "), "\n")
+  
+  # RGB -> RGBA
+  if (length(dim(img_array)) == 3 && dim(img_array)[3] == 3) {
+    alpha_layer <- array(
+      alpha,
+      dim = c(dim(img_array)[1], dim(img_array)[2], 1)
+    )
+    img_array <- abind::abind(img_array, alpha_layer, along = 3)
+  }
+  
+  list(
+    grob   = grid::rasterGrob(img_array, interpolate = TRUE),
+    height = dim(img_array)[1],
+    width  = dim(img_array)[2]
+  )
+}
+
+# Continuous panel function
+
+make_panel <- function(coords_s,
+                       HE_info,
+                       feature,
+                       palette_fn,
+                       lim,
+                       title,
+                       oob_method = scales::squish) {
+  
+  p <- ggplot(
+    coords_s,
+    aes(x = imagecol, y = -imagerow, color = .data[[feature]])
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.9) +
+    scale_color_gradientn(
+      colors = palette_fn,
+      limits = lim,
+      oob = oob_method,
+      na.value = "#DDDDDD"
+    ) +
+    guides(
+      color = guide_colorbar(
+        barheight = unit(CBAR_HEIGHT, "cm"),
+        barwidth  = unit(CBAR_WIDTH, "cm"),
+        title.position = "top"
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) title else NULL,
+      color = NULL
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = PANEL_TITLE_SIZE,
+          family = BASE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.title = element_text(
+        size = LEG_TITLE_SIZE,
+        face = "bold",
+        family = BASE_FONT
+      ),
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = BASE_FONT
+      ),
+      legend.key.height = unit(CBAR_HEIGHT, "cm")
+    )
+  
+  return(p)
+}
+
+# High-coupling panel function
+
+make_high_coupling_panel <- function(coords_s,
+                                     HE_info,
+                                     n_hc) {
+  
+  # Draw reference / NA first, high-coupling last
+  coords_ordered <- coords_s %>%
+    arrange(Spot_Label == "High-coupling")
+  
+  p <- ggplot(
+    coords_ordered,
+    aes(x = imagecol, y = -imagerow, color = Spot_Label)
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.95) +
+    scale_color_manual(
+      values = hc_cols,
+      na.value = "#DDDDDD",
+      drop = FALSE
+    ) +
+    guides(
+      color = guide_legend(
+        override.aes = list(
+          shape  = c(16, 16, 21),
+          colour = c("#D55E00", "#666666", NA_BORDER_COL),
+          fill   = c("#D55E00", "#666666", "#F7F7F7"),
+          stroke = c(0, 0, NA_BORDER_W),
+          size   = LEG_DOT_SIZE
+        )
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) {
+        paste0("High-coupling spots (n = ", n_hc, ")")
+      } else {
+        NULL
+      },
+      color = NULL
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = PANEL_TITLE_SIZE,
+          family = BASE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = BASE_FONT
+      ),
+      legend.key.height = unit(LEG_KEY_SIZE, "cm"),
+      legend.key.width  = unit(LEG_KEY_SIZE, "cm")
+    )
+  
+  return(p)
+}
+
+# Main loop
+
+cat("============================================================\n")
+cat("KPMP DKD cohort - Processing", length(valid_samples), "samples\n")
+cat("============================================================\n")
+
+for (target_sample in valid_samples) {
+  
+  cat("\nGenerating:", target_sample, "\n")
+  
+  img <- img_sample_map$image[img_sample_map$sample == target_sample]
+  
+  if (length(img) == 0) {
+    cat("  No image - skipping\n")
+    next
+  }
+  
+  img <- img[1]
+  cat("  Image:", img, "\n")
+  
+  HE_info <- get_HE_layer(SEURAT_OBJ, img, alpha = HE_ALPHA)
+  
+  coords_s <- get_coords_std(SEURAT_OBJ, img) %>%
+    left_join(
+      SEURAT_OBJ@meta.data %>%
+        rownames_to_column("Barcode") %>%
+        dplyr::select(
+          Barcode,
+          M2Mac_fraction,
+          Fibrosis_Score,
+          M2_Coeff,
+          Spot_Label
+        ),
+      by = "Barcode"
+    )
+  
+  n_hc <- sum(coords_s$Spot_Label == "High-coupling", na.rm = TRUE)
+  cat("  Spots:", nrow(coords_s), "  HC spots:", n_hc, "\n")
+  
+  # Color scale limits
+  
+  m2_vals <- coords_s$M2Mac_fraction[!is.na(coords_s$M2Mac_fraction)]
+  
+  m2_lim_hi <- if (length(m2_vals) > 0) {
+    quantile(m2_vals, 0.90, na.rm = TRUE)
+  } else {
+    1
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- max(m2_vals, na.rm = TRUE)
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- 1e-6
+  }
+  
+  fib_vals <- coords_s$Fibrosis_Score[!is.na(coords_s$Fibrosis_Score)]
+  
+  fib_lim_lo <- quantile(fib_vals, 0.10, na.rm = TRUE)
+  fib_lim_hi <- quantile(fib_vals, 0.90, na.rm = TRUE)
+  
+  if (
+    is.na(fib_lim_lo) ||
+      is.na(fib_lim_hi) ||
+      fib_lim_lo == fib_lim_hi
+  ) {
+    fib_lim_lo <- min(fib_vals, na.rm = TRUE)
+    fib_lim_hi <- max(fib_vals, na.rm = TRUE)
+  }
+  
+  # Four panels
+  
+  pA <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "M2Mac_fraction",
+    palette_fn = m2_palette(100),
+    lim        = c(0, m2_lim_hi),
+    title      = "M2 macrophage score"
+  )
+  
+  pB <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "Fibrosis_Score",
+    palette_fn = fib_palette(100),
+    lim        = c(fib_lim_lo, fib_lim_hi),
+    title      = "Fibrosis score"
+  )
+  
+  pC <- make_panel(
+    coords_s   = coords_s,
+    HE_info    = HE_info,
+    feature    = "M2_Coeff",
+    palette_fn = gwr_diverging,
+    lim        = c(-GWR_COEF_CAP, GWR_COEF_CAP),
+    title      = "GWR coefficient"
+  )
+  
+  pD <- make_high_coupling_panel(
+    coords_s = coords_s,
+    HE_info  = HE_info,
+    n_hc     = n_hc
+  )
+  
+  # Adaptive layout
+  
+  tissue_aspect <- diff(range(coords_s$imagerow, na.rm = TRUE)) /
+    diff(range(coords_s$imagecol, na.rm = TRUE))
+  
+  cat(sprintf("  Tissue aspect (H/W): %.2f\n", tissue_aspect))
+  
+  if (tissue_aspect > ASPECT_THRESHOLD) {
+    
+    cat("  -> Layout: 1x4 (tall tissue)\n")
+    
+    fig_map <- pA / pB / pC / pD
+    
+    if (SHOW_SAMPLE_TITLE) {
+      fig_map <- fig_map +
+        plot_annotation(
+          title = target_sample,
+          theme = theme(
+            plot.title = element_text(
+              hjust = 0.5,
+              face = "bold",
+              size = SAMPLE_TITLE_SIZE,
+              family = BASE_FONT
+            )
+          )
+        )
+    }
+    
+    fig_map <- fig_map &
+      theme(
+        plot.margin = margin(
+          t = 8,
+          r = 15,
+          b = 8,
+          l = 15,
+          unit = "pt"
+        )
+      )
+    
+    fig_w <- 8
+    fig_h <- 24
+    
+  } else {
+    
+    cat("  -> Layout: 2x2 (default)\n")
+    
+    fig_map <- (pA | pB) / (pC | pD)
+    
+    if (SHOW_SAMPLE_TITLE) {
+      fig_map <- fig_map +
+        plot_annotation(
+          title = target_sample,
+          theme = theme(
+            plot.title = element_text(
+              hjust = 0.5,
+              face = "bold",
+              size = SAMPLE_TITLE_SIZE,
+              family = BASE_FONT
+            )
+          )
+        )
+    }
+    
+    fig_map <- fig_map &
+      theme(
+        plot.margin = margin(
+          t = 10,
+          r = 25,
+          b = 10,
+          l = 25,
+          unit = "pt"
+        )
+      )
+    
+    fig_w <- 14
+    fig_h <- 15
+  }
+  
+  print(fig_map)
+  
+  # Save
+  
+  file_base <- file.path(
+    out_dir,
+    paste0(
+      "Spatial_4panel_",
+      target_sample,
+      "_v11_HE_v9base_",
+      timestamp
+    )
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".pdf"),
+    plot = fig_map,
+    width = fig_w,
+    height = fig_h,
+    units = "in",
+    device = cairo_pdf,
+    bg = "white"
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".png"),
+    plot = fig_map,
+    width = fig_w,
+    height = fig_h,
+    units = "in",
+    dpi = 600,
+    bg = "white"
+  )
+  
+  cat("  Saved:", file_base, sprintf(" (%dx%d in)\n", fig_w, fig_h))
+}
+
+cat("\nDone. KPMP DKD cohort.\n")
+cat("Saved in:", out_dir, "\n")
+```
+
+```{r Figure_4_KPMP_DKD_Spatial_v12_legendTitle}
+# Figure 4: KPMP DKD Spatial Plot v12
+#   Base: v9 working script
+#   - Keeps VisiumV2 x/y swap + auto-rescale
+#   - Keeps H&E background and adaptive 2x2 / 1x4 layout
+#   - Adds legend titles, following Fig2A-D style
+#   - Optional panel titles
+#   - Larger Arial legends
+#   - Visible NA legend circle
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(patchwork)
+  library(scales)
+  library(viridis)
+  library(dplyr)
+  library(tibble)
+  library(grid)
+  library(abind)
+})
+
+# Settings
+
+SEURAT_OBJ <- merged_seurat
+
+valid_samples <- c(
+  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
+  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
+  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
+)
+
+out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+# Display settings
+
+HE_ALPHA         <- 0.4
+DOT_SIZE         <- 2.0
+GWR_COEF_CAP     <- 5
+ASPECT_THRESHOLD <- 1.5
+
+SHOW_PANEL_TITLES <- FALSE   # TRUE to show each panel title (pA-pD)
+SHOW_SAMPLE_TITLE  <- TRUE    # TRUE to show the sample name on top
+
+BASE_FONT <- "Arial"
+
+PANEL_TITLE_SIZE  <- 12
+SAMPLE_TITLE_SIZE <- 16
+
+LEG_TITLE_SIZE <- 22
+LEG_TEXT_SIZE  <- 22
+LEG_TITLE_GAP  <- 18
+
+CBAR_HEIGHT <- 4.8
+CBAR_WIDTH  <- 0.8
+
+LEG_KEY_SIZE <- 1.6
+LEG_DOT_SIZE <- 6.2
+
+NA_BORDER_COL <- "#666666"
+NA_BORDER_W   <- 1.8
+
+# VisiumV2 x/y swap + auto-rescale
+
+get_coords_std <- function(obj, img_name) {
+  
+  coords_raw <- GetTissueCoordinates(obj, image = img_name)
+  
+  if ("cell" %in% colnames(coords_raw)) {
+    coords <- data.frame(
+      Barcode  = coords_raw$cell,
+      imagecol = coords_raw$y,
+      imagerow = coords_raw$x,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    coords <- data.frame(
+      Barcode  = rownames(coords_raw),
+      imagecol = coords_raw$imagecol,
+      imagerow = coords_raw$imagerow,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  img_array <- obj@images[[img_name]]@image
+  
+  if (!is.null(img_array)) {
+    img_w   <- dim(img_array)[2]
+    max_col <- max(coords$imagecol, na.rm = TRUE)
+    
+    if (max_col > img_w * 1.5) {
+      sf <- obj@images[[img_name]]@scale.factors
+      
+      scale_factor <- if (!is.null(sf$lowres)) {
+        sf$lowres
+      } else {
+        img_w / max_col * 0.95
+      }
+      
+      coords$imagecol <- coords$imagecol * scale_factor
+      coords$imagerow <- coords$imagerow * scale_factor
+      
+      cat("    [Auto-rescale: ×", round(scale_factor, 4), "]\n", sep = "")
+    }
+  }
+  
+  return(coords)
+}
+
+# Image -> Sample lookup
+
+img_sample_map <- data.frame(
+  image = Images(SEURAT_OBJ),
+  sample = sapply(Images(SEURAT_OBJ), function(img) {
+    coords_raw <- GetTissueCoordinates(SEURAT_OBJ, image = img)
+    barcodes <- if ("cell" %in% colnames(coords_raw)) {
+      coords_raw$cell
+    } else {
+      rownames(coords_raw)
+    }
+    unique(SEURAT_OBJ$orig.ident[colnames(SEURAT_OBJ) %in% barcodes])[1]
+  }),
+  stringsAsFactors = FALSE
+)
+
+print(img_sample_map)
+
+# Spot labels
+
+SEURAT_OBJ$Spot_Label <- ifelse(
+  !is.na(SEURAT_OBJ$M2_Coeff) &
+    SEURAT_OBJ$M2_Coeff > 0 &
+    SEURAT_OBJ$M2_AdjP < 0.05,
+  "High-coupling",
+  "Reference"
+)
+
+SEURAT_OBJ$Spot_Label[is.na(SEURAT_OBJ$M2_Coeff)] <- "NA"
+
+SEURAT_OBJ$Spot_Label <- factor(
+  SEURAT_OBJ$Spot_Label,
+  levels = c("High-coupling", "Reference", "NA")
+)
+
+# Color palettes
+
+m2_palette <- function(n = 100) {
+  viridis::rocket(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+fib_palette <- function(n = 100) {
+  viridis::mako(n, begin = 0.15, end = 0.95, direction = -1)
+}
+
+gwr_diverging <- c(
+  "#08519C", "#4292C6", "#9ECAE1",
+  "#FFEDA0",
+  "#FEB24C", "#FD8D3C", "#E31A1C"
+)
+
+hc_cols <- c(
+  "High-coupling" = "#D55E00",
+  "Reference"     = "#666666",
+  "NA"            = "#DDDDDD"
+)
+
+# H&E layer
+
+get_HE_layer <- function(obj, img_name, alpha = HE_ALPHA) {
+  
+  img_array <- obj@images[[img_name]]@image
+  
+  if (is.null(img_array)) {
+    warning(paste("No H&E image array for", img_name))
+    return(NULL)
+  }
+  
+  cat("    H&E array dim:", paste(dim(img_array), collapse = " x "), "\n")
+  
+  if (length(dim(img_array)) == 3 && dim(img_array)[3] == 3) {
+    alpha_layer <- array(
+      alpha,
+      dim = c(dim(img_array)[1], dim(img_array)[2], 1)
+    )
+    img_array <- abind::abind(img_array, alpha_layer, along = 3)
+  }
+  
+  list(
+    grob   = grid::rasterGrob(img_array, interpolate = TRUE),
+    height = dim(img_array)[1],
+    width  = dim(img_array)[2]
+  )
+}
+
+# Continuous panel function
+
+make_panel <- function(coords_s,
+                       HE_info,
+                       feature,
+                       palette_fn,
+                       lim,
+                       title,
+                       color_label,
+                       oob_method = scales::squish) {
+  
+  p <- ggplot(
+    coords_s,
+    aes(x = imagecol, y = -imagerow, color = .data[[feature]])
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.9) +
+    scale_color_gradientn(
+      colors = palette_fn,
+      limits = lim,
+      oob = oob_method,
+      na.value = "#DDDDDD"
+    ) +
+    guides(
+      color = guide_colorbar(
+        barheight = unit(CBAR_HEIGHT, "cm"),
+        barwidth  = unit(CBAR_WIDTH, "cm"),
+        title.position = "top"
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) title else NULL,
+      color = color_label
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = PANEL_TITLE_SIZE,
+          family = BASE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.title = element_text(
+        size = LEG_TITLE_SIZE,
+        face = "bold",
+        family = BASE_FONT,
+        margin = margin(b = LEG_TITLE_GAP)
+      ),
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = BASE_FONT
+      ),
+      legend.key.height = unit(CBAR_HEIGHT, "cm")
+    )
+  
+  return(p)
+}
+
+# High-coupling panel function
+
+make_high_coupling_panel <- function(coords_s,
+                                     HE_info,
+                                     n_hc) {
+  
+  coords_ordered <- coords_s %>%
+    arrange(Spot_Label == "High-coupling")
+  
+  p <- ggplot(
+    coords_ordered,
+    aes(x = imagecol, y = -imagerow, color = Spot_Label)
+  )
+  
+  if (!is.null(HE_info)) {
+    p <- p +
+      annotation_custom(
+        HE_info$grob,
+        xmin = 0,
+        xmax = HE_info$width,
+        ymin = -HE_info$height,
+        ymax = 0
+      )
+  }
+  
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.95) +
+    scale_color_manual(
+      values = hc_cols,
+      na.value = "#999999",
+      drop = FALSE
+    ) +
+    guides(
+      color = guide_legend(
+        override.aes = list(
+          shape  = c(16, 16, 21),
+          colour = c("#D55E00", "#666666", NA_BORDER_COL),
+          fill   = c("#D55E00", "#666666", "#F7F7F7"),
+          stroke = c(0, 0, NA_BORDER_W),
+          size   = LEG_DOT_SIZE
+        )
+      )
+    ) +
+    labs(
+      title = if (SHOW_PANEL_TITLES) {
+        paste0("High-coupling spots (n = ", n_hc, ")")
+      } else {
+        NULL
+      },
+      color = NULL
+    ) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      
+      plot.title = if (SHOW_PANEL_TITLES) {
+        element_text(
+          hjust = 0.5,
+          face = "bold",
+          size = PANEL_TITLE_SIZE,
+          family = BASE_FONT
+        )
+      } else {
+        element_blank()
+      },
+      
+      legend.position = "right",
+      legend.title = element_text(
+        size = LEG_TITLE_SIZE,
+        face = "bold",
+        family = BASE_FONT,
+        margin = margin(b = LEG_TITLE_GAP)
+      ),
+      legend.text = element_text(
+        size = LEG_TEXT_SIZE,
+        family = BASE_FONT
+      ),
+      legend.key.height = unit(LEG_KEY_SIZE, "cm"),
+      legend.key.width  = unit(LEG_KEY_SIZE, "cm"),
+      legend.box.spacing = unit(0.1, "cm"),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.box.margin = margin(0, 0, 0, 0)
+    )
+  
+  return(p)
+}
+
+# Main loop
+
+cat("============================================================\n")
+cat("KPMP DKD cohort - Processing", length(valid_samples), "samples\n")
+cat("============================================================\n")
+
+for (target_sample in valid_samples) {
+  
+  cat("\nGenerating:", target_sample, "\n")
+  
+  img <- img_sample_map$image[img_sample_map$sample == target_sample]
+  
+  if (length(img) == 0) {
+    cat("  No image - skipping\n")
+    next
+  }
+  
+  img <- img[1]
+  cat("  Image:", img, "\n")
+  
+  HE_info <- get_HE_layer(SEURAT_OBJ, img, alpha = HE_ALPHA)
+  
+  coords_s <- get_coords_std(SEURAT_OBJ, img) %>%
+    left_join(
+      SEURAT_OBJ@meta.data %>%
+        rownames_to_column("Barcode") %>%
+        dplyr::select(
+          Barcode,
+          M2Mac_fraction,
+          Fibrosis_Score,
+          M2_Coeff,
+          Spot_Label
+        ),
+      by = "Barcode"
+    )
+  
+  n_hc <- sum(coords_s$Spot_Label == "High-coupling", na.rm = TRUE)
+  cat("  Spots:", nrow(coords_s), "  HC spots:", n_hc, "\n")
+  
+  # Color scale limits
+  
+  m2_vals <- coords_s$M2Mac_fraction[!is.na(coords_s$M2Mac_fraction)]
+  
+  m2_lim_hi <- if (length(m2_vals) > 0) {
+    quantile(m2_vals, 0.90, na.rm = TRUE)
+  } else {
+    1
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- max(m2_vals, na.rm = TRUE)
+  }
+  
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) {
+    m2_lim_hi <- 1e-6
+  }
+  
+  fib_vals <- coords_s$Fibrosis_Score[!is.na(coords_s$Fibrosis_Score)]
+  
+  fib_lim_lo <- quantile(fib_vals, 0.10, na.rm = TRUE)
+  fib_lim_hi <- quantile(fib_vals, 0.90, na.rm = TRUE)
+  
+  if (
+    is.na(fib_lim_lo) ||
+      is.na(fib_lim_hi) ||
+      fib_lim_lo == fib_lim_hi
+  ) {
+    fib_lim_lo <- min(fib_vals, na.rm = TRUE)
+    fib_lim_hi <- max(fib_vals, na.rm = TRUE)
+  }
+  
+  # Four panels
+  
+  pA <- make_panel(
+    coords_s    = coords_s,
+    HE_info     = HE_info,
+    feature     = "M2Mac_fraction",
+    palette_fn  = m2_palette(100),
+    lim         = c(0, m2_lim_hi),
+    title       = "M2 macrophage score",
+    color_label = "M2Mac"
+  )
+  
+  pB <- make_panel(
+    coords_s    = coords_s,
+    HE_info     = HE_info,
+    feature     = "Fibrosis_Score",
+    palette_fn  = fib_palette(100),
+    lim         = c(fib_lim_lo, fib_lim_hi),
+    title       = "Fibrosis score",
+    color_label = "Fibrosis"
+  )
+  
+  pC <- make_panel(
+    coords_s    = coords_s,
+    HE_info     = HE_info,
+    feature     = "M2_Coeff",
+    palette_fn  = gwr_diverging,
+    lim         = c(-GWR_COEF_CAP, GWR_COEF_CAP),
+    title       = "GWR coefficient",
+    color_label = "Coeff"
+  )
+  
+  pD <- make_high_coupling_panel(
+    coords_s    = coords_s,
+    HE_info     = HE_info,
+    n_hc        = n_hc
+  )
+  
+  # Adaptive layout
+  
+  tissue_aspect <- diff(range(coords_s$imagerow, na.rm = TRUE)) /
+    diff(range(coords_s$imagecol, na.rm = TRUE))
+  
+  cat(sprintf("  Tissue aspect (H/W): %.2f\n", tissue_aspect))
+  
+  if (tissue_aspect > ASPECT_THRESHOLD) {
+    
+    cat("  -> Layout: 1x4 (tall tissue)\n")
+    
+    fig_map <- pA / pB / pC / pD
+    
+    if (SHOW_SAMPLE_TITLE) {
+      fig_map <- fig_map +
+        plot_annotation(
+          title = target_sample,
+          theme = theme(
+            plot.title = element_text(
+              hjust = 0.5,
+              face = "bold",
+              size = SAMPLE_TITLE_SIZE,
+              family = BASE_FONT
+            )
+          )
+        )
+    }
+    
+    fig_map <- fig_map &
+      theme(
+        plot.margin = margin(
+          t = 8,
+          r = 15,
+          b = 8,
+          l = 15,
+          unit = "pt"
+        )
+      )
+    
+    fig_w <- 8
+    fig_h <- 24
+    
+  } else {
+    
+    cat("  -> Layout: 2x2 (default)\n")
+    
+    fig_map <- (pA | pB) / (pC | pD)
+    
+    if (SHOW_SAMPLE_TITLE) {
+      fig_map <- fig_map +
+        plot_annotation(
+          title = target_sample,
+          theme = theme(
+            plot.title = element_text(
+              hjust = 0.5,
+              face = "bold",
+              size = SAMPLE_TITLE_SIZE,
+              family = BASE_FONT
+            )
+          )
+        )
+    }
+    
+    fig_map <- fig_map &
+      theme(
+        plot.margin = margin(
+          t = 10,
+          r = 25,
+          b = 10,
+          l = 25,
+          unit = "pt"
+        )
+      )
+    
+    fig_w <- 20
+    fig_h <- 15
+  }
+  
+  print(fig_map)
+  
+  # Save
+  
+  file_base <- file.path(
+    out_dir,
+    paste0(
+      "Spatial_4panel_",
+      target_sample,
+      "_v12_HE_v9base_legendTitle_",
+      timestamp
+    )
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".pdf"),
+    plot = fig_map,
+    width = fig_w,
+    height = fig_h,
+    units = "in",
+    device = cairo_pdf,
+    bg = "white"
+  )
+  
+  ggsave(
+    filename = paste0(file_base, ".png"),
+    plot = fig_map,
+    width = fig_w,
+    height = fig_h,
+    units = "in",
+    dpi = 600,
+    bg = "white"
+  )
+  
+  cat("  Saved:", file_base, sprintf(" (%dx%d in)\n", fig_w, fig_h))
+}
+
+cat("\nDone. KPMP DKD cohort.\n")
+cat("Saved in:", out_dir, "\n")
+```
+
+```{r KPMP HKD}
+# Figure 5: KPMP HKD Spatial Plot - styled (matched to PoC)
+#   - keeps VisiumV2 x/y swap + auto-rescale
+#   - PoC style: toggle / Arial / large legend / NA outline / enlarged colorbar / timestamp
+#   - 9 samples (passing the DEG threshold)
+suppressPackageStartupMessages({
+  library(Seurat); library(ggplot2); library(dplyr); library(tibble)
+  library(patchwork); library(grid); library(scales); library(viridis); library(abind)
+})
+
+# Settings
+SEURAT_OBJ <- merged_hkd
+valid_samples <- c(
+  "X31.10063", "X31.10221", "X31.10336",
+  "X28.12518", "X29.10410", "X28.12613",
+  "X31.10090", "X29.10400", "X31.10219"
+)
+out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_HKD/"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+# -------- Display settings --------
+HE_ALPHA <- 0.6
+SHOW_PANEL_TITLES <- FALSE   # TRUE to show each panel title (pA-pD)
+SHOW_FIGURE_TITLE <- TRUE    # TRUE to show the sample name on top
+TITLE_FONT <- "Arial"
+LEG_FONT   <- "Arial"
+TITLE_SIZE     <- 24
+FIG_TITLE_SIZE <- 16
+LEG_TITLE_SIZE <- 20
+LEG_TEXT_SIZE  <- 20
+CBAR_HEIGHT <- 4.3  # color bar height, cm
+CBAR_WIDTH  <- 0.7  # color bar width, cm
+LEG_KEY     <- 1.1  # discrete legend key size, cm
+LEG_DOT_SIZE <- 8
+LEG_TITLE_GAP <- 16
+PANEL_HGAP    <- 14
+NA_BORDER_COL <- "#999999"
+NA_BORDER_W   <- 1.5
+DOT_SIZE <- 2.5      # larger because KPMP HKD spots are sparse (adjust as needed)
+GWR_COEF_CAP <- 5
+
+cat("KPMP HKD cohort - Processing", length(valid_samples), "samples\n")
+
+# VisiumV2: x/y swap support + auto-rescale (rotation-corrected)
+#   VisiumV2: x = pixel_row (vertical), y = pixel_col (horizontal) -> SWAP
+get_coords_std <- function(obj, img_name) {
+  coords_raw <- GetTissueCoordinates(obj, image = img_name)
+
+  if ("cell" %in% colnames(coords_raw)) {
+    # VisiumV2: x = pixel_row (vertical), y = pixel_col (horizontal) -> SWAP
+    coords <- data.frame(
+      Barcode  = coords_raw$cell,
+      imagecol = coords_raw$y,    # y is horizontal
+      imagerow = coords_raw$x,    # x is vertical
+      stringsAsFactors = FALSE
+    )
+  } else {
+    # VisiumV1: as-is
+    coords <- data.frame(
+      Barcode  = rownames(coords_raw),
+      imagecol = coords_raw$imagecol,
+      imagerow = coords_raw$imagerow,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  # auto scaling
+  img_array <- obj@images[[img_name]]@image
+  if (!is.null(img_array)) {
+    img_w <- dim(img_array)[2]
+    max_col <- max(coords$imagecol, na.rm = TRUE)
+    if (max_col > img_w * 1.5) {
+      sf <- obj@images[[img_name]]@scale.factors
+      scale_factor <- if (!is.null(sf$lowres)) sf$lowres else img_w / max_col * 0.95
+      coords$imagecol <- coords$imagecol * scale_factor
+      coords$imagerow <- coords$imagerow * scale_factor
+      cat("    [Auto-rescale: ×", round(scale_factor, 4), "]\n", sep = "")
+    }
+  }
+  coords
+}
+
+# Image -> Sample lookup (handles the "cell" column)
+img_sample_map <- data.frame(
+  image  = Images(SEURAT_OBJ),
+  sample = sapply(Images(SEURAT_OBJ), function(img) {
+    coords_raw <- GetTissueCoordinates(SEURAT_OBJ, image = img)
+    barcodes <- if ("cell" %in% colnames(coords_raw)) coords_raw$cell else rownames(coords_raw)
+    unique(SEURAT_OBJ$orig.ident[colnames(SEURAT_OBJ) %in% barcodes])[1]
+  }),
+  stringsAsFactors = FALSE
+)
+print(img_sample_map)
+
+# Spot label
+SEURAT_OBJ$Spot_Label <- ifelse(
+  !is.na(SEURAT_OBJ$M2_Coeff) & SEURAT_OBJ$M2_Coeff > 0 & SEURAT_OBJ$M2_AdjP < 0.05,
+  "High-coupling", "Reference"
+)
+SEURAT_OBJ$Spot_Label[is.na(SEURAT_OBJ$M2_Coeff)] <- "NA"
+SEURAT_OBJ$Spot_Label <- factor(SEURAT_OBJ$Spot_Label,
+                                levels = c("High-coupling", "Reference", "NA"))
+
+# Color palettes
+m2_palette  <- function(n = 100) viridis::rocket(n, begin = 0.15, end = 0.95, direction = -1)
+fib_palette <- function(n = 100) viridis::mako  (n, begin = 0.15, end = 0.95, direction = -1)
+gwr_diverging <- c("#08519C", "#4292C6", "#9ECAE1",
+                   "#FFEDA0",
+                   "#FEB24C", "#FD8D3C", "#E31A1C")
+hc_cols <- c("High-coupling" = "#D55E00",
+             "Reference"     = "#666666",
+             "NA"            = "#DDDDDD")
+
+# H&E layer helper
+get_HE_layer <- function(obj, img_name, alpha = HE_ALPHA) {
+  img_array <- obj@images[[img_name]]@image
+  if (is.null(img_array)) return(NULL)
+  if (length(dim(img_array)) == 3 && dim(img_array)[3] == 3) {
+    alpha_layer <- array(alpha, dim = c(dim(img_array)[1], dim(img_array)[2], 1))
+    img_array <- abind::abind(img_array, alpha_layer, along = 3)
+  }
+  list(grob = grid::rasterGrob(img_array, interpolate = TRUE),
+       height = dim(img_array)[1], width = dim(img_array)[2])
+}
+
+# Continuous spatial panel
+make_panel <- function(coords_s, HE_info, feature, palette_fn, lim,
+                       title, color_label, oob_method = scales::squish) {
+  p <- ggplot(coords_s, aes(x = imagecol, y = -imagerow, color = .data[[feature]]))
+  if (!is.null(HE_info)) {
+    p <- p + annotation_custom(HE_info$grob,
+                               xmin = 0, xmax = HE_info$width,
+                               ymin = -HE_info$height, ymax = 0)
+  }
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.9) +
+    scale_color_gradientn(colors = palette_fn, limits = lim,
+                          oob = oob_method, na.value = "#DDDDDD") +
+    guides(color = guide_colorbar(barheight = unit(CBAR_HEIGHT, "cm"),
+                                  barwidth  = unit(CBAR_WIDTH, "cm"),
+                                  title.position = "top")) +
+    labs(title = if (SHOW_PANEL_TITLES) title else NULL, color = color_label) +
+    coord_fixed() + theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title = if (SHOW_PANEL_TITLES)
+        element_text(hjust = 0.5, face = "bold", size = TITLE_SIZE, family = TITLE_FONT)
+        else element_blank(),
+      legend.position = "right",
+      legend.title = element_text(size = LEG_TITLE_SIZE, face = "bold",
+                                  family = LEG_FONT, margin = margin(b = LEG_TITLE_GAP)),
+      legend.text  = element_text(size = LEG_TEXT_SIZE, family = LEG_FONT),
+      legend.key.height = unit(CBAR_HEIGHT, "cm"),
+      legend.box.spacing = unit(0.1, "cm"),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.box.margin = margin(0, 0, 0, 0)
+    )
+  return(p)
+}
+
+# Discrete high-coupling panel
+make_high_coupling_panel <- function(coords_s, HE_info, n_hc) {
+  coords_ordered <- coords_s %>% arrange(Spot_Label == "High-coupling")
+  p <- ggplot(coords_ordered, aes(x = imagecol, y = -imagerow, color = Spot_Label))
+  if (!is.null(HE_info)) {
+    p <- p + annotation_custom(HE_info$grob,
+                               xmin = 0, xmax = HE_info$width,
+                               ymin = -HE_info$height, ymax = 0)
+  }
+  p <- p +
+    geom_point(size = DOT_SIZE, alpha = 0.95) +
+    scale_color_manual(values = hc_cols, na.value = "#999999", drop = FALSE) +
+    guides(color = guide_legend(override.aes = list(
+      shape  = c(16, 16, 21),
+      colour = c("#D55E00", "#666666", NA_BORDER_COL),
+      fill   = c("#D55E00", "#666666", "#F7F7F7"),
+      stroke = c(0, 0, NA_BORDER_W),
+      size   = LEG_DOT_SIZE
+    ))) +
+    labs(title = if (SHOW_PANEL_TITLES) paste0("High-coupling Spots (n = ", n_hc, ")") else NULL,
+         color = NULL) +
+    coord_fixed() + theme_void() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title = if (SHOW_PANEL_TITLES)
+        element_text(hjust = 0.5, face = "bold", size = TITLE_SIZE, family = TITLE_FONT)
+        else element_blank(),
+      legend.position = "right",
+      legend.text = element_text(size = LEG_TEXT_SIZE, family = LEG_FONT),
+      legend.key.height = unit(LEG_KEY, "cm"),
+      legend.key.width  = unit(LEG_KEY, "cm")
+    )
+  return(p)
+}
+
+# Main loop (test with 1 sample first)
+for (target_sample in valid_samples) {
+  cat("\nGenerating:", target_sample, "\n")
+  img <- img_sample_map$image[img_sample_map$sample == target_sample]
+  if (length(img) == 0) { cat("  No image - skipping\n"); next }
+  img <- img[1]
+
+  HE_info <- get_HE_layer(SEURAT_OBJ, img, alpha = HE_ALPHA)
+
+  coords_s <- get_coords_std(SEURAT_OBJ, img) %>%
+    left_join(SEURAT_OBJ@meta.data %>%
+                rownames_to_column("Barcode") %>%
+                dplyr::select(Barcode, M2Mac_fraction, Fibrosis_Score,
+                              M2_Coeff, Spot_Label),
+              by = "Barcode")
+
+  n_hc <- sum(coords_s$Spot_Label == "High-coupling", na.rm = TRUE)
+  cat("  HC spots:", n_hc, "\n")
+
+  # Per-sample color limits
+  m2_vals <- coords_s$M2Mac_fraction[!is.na(coords_s$M2Mac_fraction)]
+  m2_lim_hi <- if (length(m2_vals) > 0) quantile(m2_vals, 0.90, na.rm = TRUE) else 1
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) m2_lim_hi <- max(m2_vals, na.rm = TRUE)
+  if (is.na(m2_lim_hi) || m2_lim_hi <= 0) m2_lim_hi <- 1e-6
+
+  fib_vals <- coords_s$Fibrosis_Score[!is.na(coords_s$Fibrosis_Score)]
+  fib_lim_lo <- quantile(fib_vals, 0.10, na.rm = TRUE)
+  fib_lim_hi <- quantile(fib_vals, 0.90, na.rm = TRUE)
+  if (is.na(fib_lim_lo) || is.na(fib_lim_hi) || fib_lim_lo == fib_lim_hi) {
+    fib_lim_lo <- min(fib_vals, na.rm = TRUE); fib_lim_hi <- max(fib_vals, na.rm = TRUE)
+  }
+
+  # Four panels
+  pA <- make_panel(coords_s, HE_info, "M2Mac_fraction", m2_palette(100), c(0, m2_lim_hi),
+                   paste0("M2 Macrophage Score (0–", round(m2_lim_hi, 3), ")"), "M2Mac")
+  pB <- make_panel(coords_s, HE_info, "Fibrosis_Score", fib_palette(100), c(fib_lim_lo, fib_lim_hi),
+                   paste0("Fibrosis Score (", round(fib_lim_lo, 2), "–", round(fib_lim_hi, 2), ")"),
+                   "Fibrosis")
+  pC <- make_panel(coords_s, HE_info, "M2_Coeff", gwr_diverging, c(-GWR_COEF_CAP, GWR_COEF_CAP),
+                   paste0("GWR Coefficient (±", GWR_COEF_CAP, ")"), "Coeff")
+  pD <- make_high_coupling_panel(coords_s, HE_info, n_hc)
+
+  # Combine
+  fig_map <- (pA | pB) / (pC | pD)
+  if (SHOW_FIGURE_TITLE) {
+    fig_map <- fig_map +
+      plot_annotation(title = target_sample,
+                      theme = theme(plot.title = element_text(hjust = 0.5, face = "bold",
+                                                              size = FIG_TITLE_SIZE,
+                                                              family = TITLE_FONT)))
+  }
+  fig_map <- fig_map &
+    theme(plot.margin = margin(t = 4, r = PANEL_HGAP, b = 4, l = PANEL_HGAP))
+
+  print(fig_map)
+
+  # Save
+  title_tag <- if (SHOW_PANEL_TITLES) "withPanelTitle" else "noPanelTitle"
+  file_base <- file.path(out_dir,
+    paste0("Spatial_4panel_", target_sample, "_HE_", title_tag, "_", timestamp))
+  ggsave(paste0(file_base, ".pdf"), fig_map,
+         width = 16, height = 13, units = "in", device = cairo_pdf)
+  ggsave(paste0(file_base, ".png"), fig_map,
+         width = 16, height = 13, units = "in", dpi = 300, bg = "white")
+  cat("  ✓ Saved:", file_base, "\n")
+}
+cat("\nDone. KPMP HKD cohort.\nSaved in:", out_dir, "\n")
+```
+

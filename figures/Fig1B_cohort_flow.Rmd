@@ -1,0 +1,627 @@
+---
+title: "Fig1B_cohort flow"
+author: "Kanako Terakawa"
+date: "2026-05-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Figure 1B — Cohort and sample flow
+# GWR / DKD spatial transcriptomics manuscript (Terakawa et al.)
+#
+# Pure ggplot2 (+ grid for arrows). No exotic packages required.
+# Rounded boxes are drawn with a self-contained helper (geom_polygon),
+# so the script runs without ggchicklet / DiagrammeR / etc.
+#
+# Output: PNG (300 dpi) and PDF (vector), publication style.
+# Tweak the marked PARAMETERS block to adjust spacing / colours / fonts.
+
+library(ggplot2)
+library(grid)   # unit(), arrow()
+
+## ---- (optional) Arial-like font ---------------------------------------------
+## To match the other manuscript figures, uncomment and set a font.
+## Requires the 'showtext' package (install locally; not needed to run otherwise).
+# library(showtext)
+# font_add_google("Inter", "Inter")   # or use a locally installed Arial
+# showtext_auto()
+# base_family <- "Inter"
+base_family <- ""   # "" = default sans; set to "Arial"/"Helvetica" if available
+
+# PARAMETERS ------------------------------------------------------------------
+col_x   <- c(Susztak = 2, KPMP_DKD = 5.5, KPMP_HKD = 9)  # column centres (pitch 3)
+box_w   <- 2.8                                          # box width
+# row centres (top -> bottom) and heights
+y_head  <- 6.4; h_head <- 0.60
+y_total <- 5.30; h_box  <- 0.90
+y_qc    <- 3.70
+y_deg   <- 2.00; h_deg  <- 1.00
+corner_r <- 0.13                                        # rounded-corner radius
+
+# cohort palette: header (solid + white text), border, light tint, dark text
+pal <- list(
+  Susztak  = list(header = "#1F3864", border = "#1F3864", tint = "#E8EEF6", text = "#1F3864"),
+  KPMP_DKD = list(header = "#ED7D31", border = "#C55A11", tint = "#FBE9DA", text = "#B5560F"),
+  KPMP_HKD = list(header = "#138D75", border = "#0E6B58", tint = "#E0F0EC", text = "#0E6B58")
+)
+header_label <- c(Susztak = "Susztak DKD cohort",
+                  KPMP_DKD = "KPMP DKD cohort",
+                  KPMP_HKD = "KPMP HKD cohort")
+
+# sample numbers per cohort
+nums <- data.frame(
+  cohort   = c("Susztak", "KPMP_DKD", "KPMP_HKD"),
+  total    = c(6, 30, 27),
+  passqc   = c(6, 29, 23),
+  deg      = c(3, 14,  9),
+  qc_excl  = c(NA, 1,  4),    # NA = no QC exclusion (no label drawn)
+  deg_excl = c(3, 15, 14),
+  stringsAsFactors = FALSE
+)
+
+# Rounded-rectangle helper -> polygon vertices --------------------------------
+round_rect <- function(xc, yc, w, h, r = 0.13, n = 16) {
+  x0 <- xc - w/2; x1 <- xc + w/2
+  y0 <- yc - h/2; y1 <- yc + h/2
+  r  <- min(r, w/2, h/2)
+  arc <- function(cx, cy, a0, a1) {
+    t <- seq(a0, a1, length.out = n)
+    data.frame(x = cx + r * cos(t), y = cy + r * sin(t))
+  }
+  rbind(
+    arc(x1 - r, y0 + r, -pi/2, 0),     # bottom-right
+    arc(x1 - r, y1 - r,  0,    pi/2),  # top-right
+    arc(x0 + r, y1 - r,  pi/2, pi),    # top-left
+    arc(x0 + r, y0 + r,  pi,   3*pi/2) # bottom-left
+  )
+}
+
+# Build geometry --------------------------------------------------------------
+boxes  <- list()     # polygon data for all boxes
+texts  <- list()     # title / n-value text
+arrows <- list()     # connector segments
+excl   <- list()     # exclusion labels
+gid    <- 0
+
+add_box <- function(xc, yc, w, h, fill, border, lwd = 0.8) {
+  gid <<- gid + 1
+  poly <- round_rect(xc, yc, w, h, r = corner_r)
+  poly$grp <- gid; poly$fill <- fill; poly$border <- border; poly$lwd <- lwd
+  boxes[[length(boxes) + 1]] <<- poly
+}
+
+for (ch in names(col_x)) {
+  x <- col_x[[ch]]; p <- pal[[ch]]
+  rn <- nums[nums$cohort == ch, ]
+
+  # header (solid colour, white text)
+  add_box(x, y_head, box_w, h_head, fill = p$header, border = p$header)
+  texts[[length(texts) + 1]] <- data.frame(
+    x = x, y = y_head, lab = header_label[[ch]],
+    col = "white", face = "bold", size = 3.7, italic = FALSE)
+
+  # three flow boxes (Total = white; QC & DEG = light tint)
+  flow <- list(
+    list(y = y_total, h = h_box, fill = "white", title = "Total samples",      n = rn$total),
+    list(y = y_qc,    h = h_box, fill = p$tint,  title = "Passed QC",            n = rn$passqc),
+    list(y = y_deg,   h = h_deg, fill = p$tint,  title = "Included in DEG analysis", n = rn$deg)
+  )
+  for (b in flow) {
+    add_box(x, b$y, box_w, b$h, fill = b$fill, border = p$border, lwd = 0.9)
+    texts[[length(texts) + 1]] <- data.frame(
+      x = x, y = b$y + 0.17, lab = b$title, col = "#1A1A1A",
+      face = "plain", size = 3.3, italic = FALSE)
+    texts[[length(texts) + 1]] <- data.frame(
+      x = x, y = b$y - 0.20, lab = paste0("n = ", b$n), col = "#1A1A1A",
+      face = "plain", size = 3.3, italic = TRUE)
+  }
+
+  # arrows between boxes (coloured, closed head)
+  arrows[[length(arrows) + 1]] <- data.frame(
+    x = x, xend = x,
+    y    = c(y_total - h_box/2, y_qc - h_box/2),
+    yend = c(y_qc + h_box/2,    y_deg + h_deg/2),
+    col  = p$border)
+
+  # QC exclusion label (right of upper arrow); skip if NA
+  if (!is.na(rn$qc_excl)) {
+    excl[[length(excl) + 1]] <- data.frame(
+      x = x + box_w/2 - 0.95, y = (y_total - h_box/2 + y_qc + h_box/2)/2,
+      lab = paste0("Excluded by QC: n = ", rn$qc_excl),
+      col = p$text, hjust = 0, size = 2.7)
+  }
+  # DEG exclusion label (below DEG box, centred)
+  excl[[length(excl) + 1]] <- data.frame(
+    x = x, y = y_deg - h_deg/2 - 0.33,
+    lab = paste0("Excluded from DEG: n = ", rn$deg_excl),
+    col = p$text, hjust = 0.5, size = 2.7)
+}
+
+boxes_df  <- do.call(rbind, boxes)
+texts_df  <- do.call(rbind, texts)
+arrows_df <- do.call(rbind, arrows)
+excl_df   <- do.call(rbind, excl)
+
+# outer frame + title + footnote
+frame_df <- round_rect((min(col_x) - box_w/2 - 0.4 + max(col_x) + box_w/2 + 1.7)/2,
+                       3.95, (max(col_x) + box_w/2 + 1.7) - (min(col_x) - box_w/2 - 0.4),
+                       7.3, r = 0.06, n = 16)
+
+# Plot ------------------------------------------------------------------------
+p <- ggplot() +
+  # outer frame
+  geom_path(data = frame_df, aes(x, y), colour = "black", linewidth = 0.5) +
+  # boxes
+  geom_polygon(data = boxes_df,
+               aes(x, y, group = grp, fill = fill, colour = border),
+               linewidth = 0.9) +
+  scale_fill_identity() + scale_colour_identity() +
+  # arrows
+  geom_segment(data = arrows_df,
+               aes(x = x, y = y, xend = xend, yend = yend, colour = col),
+               linewidth = 0.9,
+               arrow = arrow(type = "closed", length = unit(0.16, "cm"))) +
+  # box text
+  geom_text(data = texts_df,
+            aes(x, y, label = lab, colour = col,
+                fontface = ifelse(italic, "italic", face), size = size),
+            family = base_family) +
+  scale_size_identity() +
+  # exclusion labels
+  geom_text(data = excl_df,
+            aes(x, y, label = lab, colour = col, hjust = hjust),
+            size = 2.7, family = base_family) +
+  # title
+  annotate("text", x = mean(col_x), y = 7.15, label = "Cohort and sample flow",
+           fontface = "bold", size = 6, family = base_family) +
+  # footnote
+  annotate("text", x = mean(col_x), y = 0.75,
+           label = "QC, quality control; DEG, differential expression.",
+           size = 3, colour = "#555555", family = base_family) +
+  coord_fixed(ratio = 1, clip = "off") +
+  theme_void() +
+  theme(legend.position = "none", plot.margin = margin(4, 4, 4, 4))
+
+print(p)
+
+# Save ------------------------------------------------------------------------
+ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
+ggsave(sprintf("Fig1B_cohort_sample_flow_%s.png", ts), p,
+       width = 10, height = 6.9, dpi = 300, bg = "white")
+ggsave(sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts), p,
+       width = 10, height = 6.9, bg = "white")
+
+message("Saved Fig1B_cohort_sample_flow_", ts, ".png / .pdf")
+
+```
+```{r}
+# Figure 1B — Cohort and sample flow
+# GWR / DKD spatial transcriptomics manuscript
+#
+# Output:
+#   - PNG 300 dpi
+#   - PDF vector
+#
+# Main fixes:
+#   - Symmetric x-axis limits
+#   - Properly centered title / footnote / frame
+#   - Wider boxes
+#   - Wrapped long labels to avoid text overflow
+
+library(ggplot2)
+library(grid)
+
+# Font
+base_family <- ""   # set to "Arial" or "Helvetica" if available
+
+# PARAMETERS
+
+# Column centers
+col_x <- c(
+  Susztak  = 2.0,
+  KPMP_DKD = 5.4,
+  KPMP_HKD = 8.8
+)
+
+# Box size
+box_w <- 2.75     # larger than before to prevent text overflow
+
+# Row centers
+y_head  <- 6.45
+y_total <- 5.25
+y_qc    <- 3.65
+y_deg   <- 2.05
+
+# Box heights
+h_head <- 0.60
+h_box  <- 0.90
+h_deg  <- 1.00
+
+corner_r <- 0.13
+
+# Symmetric outer layout
+x_left  <- min(col_x) - box_w / 2 - 0.40
+x_right <- max(col_x) + box_w / 2 + 0.40
+x_mid   <- (x_left + x_right) / 2
+
+y_bottom <- 0.45
+y_top    <- 7.55
+
+# Colors
+
+pal <- list(
+  Susztak = list(
+    header = "#1F3864",
+    border = "#1F3864",
+    tint   = "#E8EEF6",
+    text   = "#1F3864"
+  ),
+  KPMP_DKD = list(
+    header = "#ED7D31",
+    border = "#C55A11",
+    tint   = "#FBE9DA",
+    text   = "#B5560F"
+  ),
+  KPMP_HKD = list(
+    header = "#138D75",
+    border = "#0E6B58",
+    tint   = "#E0F0EC",
+    text   = "#0E6B58"
+  )
+)
+
+header_label <- c(
+  Susztak  = "Published DKD cohort",
+  KPMP_DKD = "KPMP DKD cohort",
+  KPMP_HKD = "KPMP HKD cohort"
+)
+
+# Sample numbers
+
+nums <- data.frame(
+  cohort   = c("Susztak", "KPMP_DKD", "KPMP_HKD"),
+  total    = c(6, 30, 27),
+  passqc   = c(6, 29, 23),
+  deg      = c(3, 14, 9),
+  qc_excl  = c(NA, 1, 4),
+  deg_excl = c(3, 15, 14),
+  stringsAsFactors = FALSE
+)
+
+# Helper: rounded rectangle polygon
+
+round_rect <- function(xc, yc, w, h, r = 0.13, n = 20) {
+  x0 <- xc - w / 2
+  x1 <- xc + w / 2
+  y0 <- yc - h / 2
+  y1 <- yc + h / 2
+  
+  r <- min(r, w / 2, h / 2)
+  
+  arc <- function(cx, cy, a0, a1) {
+    t <- seq(a0, a1, length.out = n)
+    data.frame(
+      x = cx + r * cos(t),
+      y = cy + r * sin(t)
+    )
+  }
+  
+  rbind(
+    arc(x1 - r, y0 + r, -pi / 2, 0),
+    arc(x1 - r, y1 - r, 0, pi / 2),
+    arc(x0 + r, y1 - r, pi / 2, pi),
+    arc(x0 + r, y0 + r, pi, 3 * pi / 2)
+  )
+}
+
+# Build geometry
+
+boxes  <- list()
+texts  <- list()
+arrows <- list()
+excl   <- list()
+gid    <- 0
+
+add_box <- function(xc, yc, w, h, fill, border, lwd = 0.9) {
+  gid <<- gid + 1
+  poly <- round_rect(xc, yc, w, h, r = corner_r)
+  poly$grp <- gid
+  poly$fill <- fill
+  poly$border <- border
+  poly$lwd <- lwd
+  boxes[[length(boxes) + 1]] <<- poly
+}
+
+for (ch in names(col_x)) {
+  
+  x <- col_x[[ch]]
+  p <- pal[[ch]]
+  rn <- nums[nums$cohort == ch, ]
+  
+  # Header
+  add_box(
+    xc = x,
+    yc = y_head,
+    w = box_w,
+    h = h_head,
+    fill = p$header,
+    border = p$header
+  )
+  
+  texts[[length(texts) + 1]] <- data.frame(
+    x = x,
+    y = y_head,
+    lab = header_label[[ch]],
+    col = "white",
+    face = "bold",
+    size = 4.0,
+    stringsAsFactors = FALSE
+  )
+  
+  # Flow boxes
+  flow <- list(
+    list(
+      y = y_total,
+      h = h_box,
+      fill = "white",
+      title = "Total samples",
+      n = rn$total
+    ),
+    list(
+      y = y_qc,
+      h = h_box,
+      fill = p$tint,
+      title = "Passed QC",
+      n = rn$passqc
+    ),
+    list(
+      y = y_deg,
+      h = h_deg,
+      fill = p$tint,
+      title = "Included in\nDEG analysis",
+      n = rn$deg
+    )
+  )
+  
+  for (b in flow) {
+    
+    add_box(
+      xc = x,
+      yc = b$y,
+      w = box_w,
+      h = b$h,
+      fill = b$fill,
+      border = p$border
+    )
+    
+    # Title inside box
+    texts[[length(texts) + 1]] <- data.frame(
+      x = x,
+      y = b$y + 0.18,
+      lab = b$title,
+      col = "#1A1A1A",
+      face = "plain",
+      size = 3.6,
+      stringsAsFactors = FALSE
+    )
+    
+    # n value
+    texts[[length(texts) + 1]] <- data.frame(
+      x = x,
+      y = b$y - 0.25,
+      lab = paste0("italic(n) == ", b$n),
+      col = "#1A1A1A",
+      face = "plain",
+      size = 3.6,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Arrows
+  arrows[[length(arrows) + 1]] <- data.frame(
+    x = x,
+    xend = x,
+    y = y_total - h_box / 2,
+    yend = y_qc + h_box / 2,
+    col = p$border,
+    stringsAsFactors = FALSE
+  )
+  
+  arrows[[length(arrows) + 1]] <- data.frame(
+    x = x,
+    xend = x,
+    y = y_qc - h_box / 2,
+    yend = y_deg + h_deg / 2,
+    col = p$border,
+    stringsAsFactors = FALSE
+  )
+  
+  # QC exclusion label
+  if (!is.na(rn$qc_excl)) {
+    excl[[length(excl) + 1]] <- data.frame(
+      x = x + 0.45,
+      y = 4.45,
+      lab = paste0("Excluded by QC: n = ", rn$qc_excl),
+      col = p$text,
+      hjust = 0,
+      size = 3.1,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # DEG exclusion label
+  excl[[length(excl) + 1]] <- data.frame(
+    x = x,
+    y = y_deg - h_deg / 2 - 0.36,
+    lab = paste0("Excluded from DEG: n = ", rn$deg_excl),
+    col = p$text,
+    hjust = 0.5,
+    size = 3.1,
+    stringsAsFactors = FALSE
+  )
+}
+
+boxes_df  <- do.call(rbind, boxes)
+texts_df  <- do.call(rbind, texts)
+arrows_df <- do.call(rbind, arrows)
+excl_df   <- do.call(rbind, excl)
+
+# Outer frame
+frame_df <- round_rect(
+  xc = x_mid,
+  yc = 3.95,
+  w = x_right - x_left,
+  h = 7.10,
+  r = 0.06,
+  n = 20
+)
+
+# Plot
+
+p <- ggplot() +
+  
+  # Outer frame
+  geom_polygon(
+    data = frame_df,
+    aes(x = x, y = y),
+    fill = NA,
+    colour = "black",
+    linewidth = 0.5
+  ) +
+  
+  # Boxes
+  geom_polygon(
+    data = boxes_df,
+    aes(
+      x = x,
+      y = y,
+      group = grp,
+      fill = fill,
+      colour = border
+    ),
+    linewidth = 0.9
+  ) +
+  
+  scale_fill_identity() +
+  scale_colour_identity() +
+  
+  # Arrows
+  geom_segment(
+    data = arrows_df,
+    aes(
+      x = x,
+      y = y,
+      xend = xend,
+      yend = yend,
+      colour = col
+    ),
+    linewidth = 0.9,
+    arrow = arrow(
+      type = "closed",
+      length = unit(0.16, "cm")
+    )
+  ) +
+  
+  # Text in boxes
+  geom_text(
+    data = texts_df,
+    aes(
+      x = x,
+      y = y,
+      label = lab,
+      colour = col,
+      fontface = face,
+      size = size
+    ),
+    hjust = 0.5,
+    vjust = 0.5,
+    lineheight = 0.95,
+    family = base_family,
+    parse = FALSE
+  ) +
+  
+  scale_size_identity() +
+  
+  # Exclusion labels
+  geom_text(
+    data = excl_df,
+    aes(
+      x = x,
+      y = y,
+      label = lab,
+      colour = col,
+      hjust = hjust,
+      size = size
+    ),
+    vjust = 0.5,
+    family = base_family
+  ) +
+  
+  # Title
+  annotate(
+    "text",
+    x = x_mid,
+    y = 7.10,
+    label = "Cohort and sample flow",
+    fontface = "bold",
+    size = 6.6,
+    family = base_family
+  ) +
+  
+  # Footnote
+  annotate(
+    "text",
+    x = x_mid,
+    y = 0.82,
+    label = "QC, quality control; DEG, differential expression.",
+    size = 3.4,
+    colour = "#555555",
+    family = base_family
+  ) +
+  
+  coord_fixed(
+    ratio = 1,
+    xlim = c(x_left, x_right),
+    ylim = c(y_bottom, y_top),
+    clip = "off"
+  ) +
+  
+  theme_void() +
+  
+  theme(
+    legend.position = "none",
+    plot.margin = margin(4, 4, 4, 4)
+  )
+
+print(p)
+```
+
+```{r}
+# Save
+
+ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+ggsave(
+  filename = sprintf("Fig1B_cohort_sample_flow_%s.png", ts),
+  plot = p,
+  width = 10.5,
+  height = 6.8,
+  dpi = 300,
+  bg = "white"
+)
+
+ggsave(
+  filename = sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts),
+  plot = p,
+  width = 10.5,
+  height = 6.8,
+  bg = "white"
+)
+
+message("Saved Fig1B_cohort_sample_flow_", ts, ".png / .pdf")
+```
+

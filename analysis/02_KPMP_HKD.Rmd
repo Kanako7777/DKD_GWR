@@ -1,0 +1,503 @@
+---
+title: "KPMP HKD analysis"
+author: "Kanako Terakawa"
+output: html_document
+---
+
+# Prerequisites
+# The following objects must exist in the R environment:
+#   - ref_seurat : KPMP reference (with subclass.l2 metadata, normalized)
+#   - merged_hkd : HKD Visium data (with M2Mac_fraction stored)
+# The fibrosis gene set and GWR parameters are all identical to the DKD
+# discovery analysis and hardcoded in this script.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+library(Seurat)
+library(SeuratObject)
+library(SeuratDisk)
+library(BPCells)
+library(hdf5r)
+library(tidyverse)
+library(patchwork)
+library(GWmodel)
+library(spdep)
+library(edgeR)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(EnhancedVolcano)
+library(ggplot2)
+library(scales)
+library(fgsea)
+library(msigdbr)
+```
+
+```{r Data loading, Pre-processing, warning=FALSE}
+# Settings
+ROOT_DIR_HKD <- "/path/to/KPMP_DKD_ST_project/KPMP_HKD_ST_data"
+
+# put the downloaded HKD sample IDs here
+sampleNames_HKD <- c("27-10087", "27-10155", "27-10170", "28-12372", "28-12518",
+  "28-12545", "28-12557", "28-12613", "28-12629", "29-10013",
+  "29-10380", "29-10400", "29-10410", "31-10063", "31-10078",
+  "31-10090", "31-10091", "31-10154", "31-10169", "31-10177",
+  "31-10210", "31-10219", "31-10221", "31-10322", "31-10336",
+  "31-10379", "934-10009")
+
+# Load and merge
+seurat_list_hkd <- list()
+
+for (sample in sampleNames_HKD) {
+  input_dir <- file.path(ROOT_DIR_HKD, sample, "outs")
+  
+  if (file.exists(file.path(input_dir, "filtered_feature_bc_matrix.h5"))) {
+    print(paste("Loading:", sample))
+    obj <- Load10X_Spatial(
+      data.dir = input_dir,
+      filename = "filtered_feature_bc_matrix.h5",
+      slice    = sample
+    )
+    obj$orig.ident  <- sample
+    obj$disease     <- "HKD"   # label to distinguish from DKD
+    seurat_list_hkd[[sample]] <- obj
+  } else {
+    warning(paste("File not found for:", sample))
+  }
+}
+
+if (length(seurat_list_hkd) > 0) {
+  merged_hkd <- merge(seurat_list_hkd[[1]], y = seurat_list_hkd[-1])
+  rm(seurat_list_hkd); gc()
+  message("HKD loaded: ", ncol(merged_hkd), " spots")
+} else {
+  stop("No HKD data loaded.")
+}
+```
+
+```{r outdir}
+outdir <- "/path/to/KPMP_DKD_ST_project/KPMP analysis for paper/HKD/"
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r fixed_params}
+# Fixed parameters (identical to the KPMP DKD analysis)
+FINAL_FIB_GENES <- c(
+  "ITGBL1", "INHBA", "NALCN", "LMOD1", "GLI2", "COL6A3", "ANO3",
+  "CARMN", "PRRX1", "PDLIM3", "ANO1", "THBS2", "SULF1", "DPYSL3",
+  "COL16A1", "COL5A1", "COL1A1", "NKD1", "ITGA11", "TRPC4", "EDNRA",
+  "GUCY1A2", "MYH11", "CDH11", "NTM", "RAMP1", "PRR16", "PTGIS", "SYNPO2"
+)
+
+MAC_M2_SCORE_COL <- "prediction.score.MAC.M2"
+GWR_FORMULA_STR  <- "Y_Fibrosis ~ X_M2 + Cov_logUMI"
+f_main           <- as.formula(GWR_FORMULA_STR)
+
+GWR_COEF_THRESHOLD   <- 0
+GWR_FDR_THRESHOLD    <- 0.05
+MIN_HIGHCOUPLING_SPOTS <- 20
+MIN_REFERENCE_SPOTS    <- 20
+
+QC_MEDIAN_NFEATURE_MIN <- 500
+QC_MEDIAN_MITO_MAX     <- 25
+QC_MIN_SPOTS           <- 100
+QC_SPOT_NFEATURE_MIN   <- 500
+QC_SPOT_MITO_MAX       <- 25
+
+cat("=== Fixed Parameters ===\n")
+cat("Fibrosis genes (n =", length(FINAL_FIB_GENES), "):",
+    paste(FINAL_FIB_GENES, collapse = ", "), "\n")
+cat("GWR formula   :", GWR_FORMULA_STR, "\n")
+cat("QC nFeature   : >=", QC_MEDIAN_NFEATURE_MIN, "\n")
+```
+
+```{r QC~deconvulsion}
+# QC
+merged_hkd[["percent.mt"]] <- PercentageFeatureSet(merged_hkd,
+                                                    pattern = "^MT-",
+                                                    assay = "Spatial")
+
+sample_qc_stats <- merged_hkd@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(
+    Median_nFeature = median(nFeature_Spatial),
+    Median_Mito     = median(percent.mt),
+    n_Spots         = n()
+  )
+print(sample_qc_stats)
+
+keep_samples <- sample_qc_stats %>%
+  filter(Median_nFeature >= QC_MEDIAN_NFEATURE_MIN,
+         Median_Mito     <= QC_MEDIAN_MITO_MAX,
+         n_Spots         >= QC_MIN_SPOTS) %>%
+  pull(orig.ident)
+
+cat("Keeping samples:", length(keep_samples), "/", 
+    length(unique(merged_hkd$orig.ident)), "\n")
+
+merged_hkd <- subset(merged_hkd,
+                     subset = orig.ident %in% keep_samples &
+                              nFeature_Spatial > QC_SPOT_NFEATURE_MIN &
+                              percent.mt       < QC_SPOT_MITO_MAX)
+cat("Spots after QC:", ncol(merged_hkd), "\n")
+
+# Normalization -> PCA
+merged_hkd <- NormalizeData(merged_hkd,
+                            normalization.method = "LogNormalize",
+                            scale.factor = 10000,
+                            assay = "Spatial")
+merged_hkd <- FindVariableFeatures(merged_hkd,
+                                   selection.method = "vst",
+                                   nfeatures = 2000)
+merged_hkd <- ScaleData(merged_hkd)
+merged_hkd <- RunPCA(merged_hkd, assay = "Spatial", verbose = FALSE)
+
+# Standardize sample names
+merged_hkd$orig.ident <- make.names(merged_hkd$orig.ident)
+keep_samples          <- make.names(keep_samples)
+Idents(merged_hkd)    <- merged_hkd$orig.ident
+
+cat("Layers after normalize:", Layers(merged_hkd[["Spatial"]]), "\n")
+cat("Reductions:", Reductions(merged_hkd), "\n")
+
+# Deconvolution (assumes ref_seurat is already loaded)
+merged_hkd <- FindVariableFeatures(merged_hkd, nfeatures = 2000)
+merged_hkd <- ScaleData(merged_hkd)
+merged_hkd <- RunPCA(merged_hkd, verbose = FALSE)
+
+anchors <- FindTransferAnchors(
+  reference            = ref_seurat,
+  query                = merged_hkd,
+  normalization.method = "LogNormalize",
+  reference.reduction  = "pca",
+  dims                 = 1:30
+)
+
+predictions <- TransferData(
+  anchorset        = anchors,
+  refdata          = ref_seurat$subclass.l2,
+  weight.reduction = merged_hkd[["pca"]],
+  dims             = 1:30
+)
+
+merged_hkd$M2Mac_fraction <- predictions[[MAC_M2_SCORE_COL]]
+cat("M2Mac_fraction summary:\n")
+print(summary(merged_hkd$M2Mac_fraction))
+```
+
+
+```{r fibrosis_score}
+# Fibrosis Score
+final_fib_genes <- intersect(FINAL_FIB_GENES, rownames(merged_hkd))
+genes_missing   <- setdiff(FINAL_FIB_GENES, rownames(merged_hkd))
+
+cat("=== Fibrosis Gene Coverage (HKD) ===\n")
+cat("Fixed gene-list size      :", length(FINAL_FIB_GENES), "\n")
+cat("Present in HKD data         :", length(final_fib_genes), "\n")
+if (length(genes_missing) > 0)
+  cat("Missing                 :", paste(genes_missing, collapse = ", "), "\n")
+cat("Genes used              :", paste(final_fib_genes, collapse = ", "), "\n")
+
+# Join layers
+merged_hkd <- JoinLayers(merged_hkd, assay = "Spatial")
+
+# check
+Layers(merged_hkd[["Spatial"]])
+# OK if it prints "counts" "data"
+
+# add before AddModuleScore
+DefaultAssay(merged_hkd) <- "Spatial"
+
+if (length(final_fib_genes) >= 5) {
+  merged_hkd <- AddModuleScore(
+    merged_hkd,
+    features = list(final_fib_genes),
+    name     = "Fibrosis_Score"
+  )
+  merged_hkd$Fibrosis_Score  <- merged_hkd$Fibrosis_Score1
+  merged_hkd$Fibrosis_Score1 <- NULL
+  cat("\nFibrosis_Score summary:\n")
+  print(summary(merged_hkd$Fibrosis_Score))
+  print("OK: Fibrosis_Score updated (merged_hkd)")
+} else {
+  stop("Error: fewer than 5 shared genes")
+}
+```
+
+```{r GWR}
+# 1. Get coordinates (from merged_hkd)
+print("Extracting coordinates...")
+img_names       <- Images(merged_hkd)
+all_coords_list <- list()
+
+for (img in img_names) {
+  c_data         <- GetTissueCoordinates(merged_hkd, image = img)
+  c_data$Barcode <- rownames(c_data)
+  all_coords_list[[img]] <- c_data
+}
+
+all_coords <- do.call(rbind, all_coords_list)
+cols  <- colnames(all_coords)
+y_col <- grep("row|y", cols, ignore.case = TRUE, value = TRUE)[1]
+x_col <- grep("col|x", cols, ignore.case = TRUE, value = TRUE)[1]
+all_coords$final_x <- all_coords[[x_col]]
+all_coords$final_y <- all_coords[[y_col]]
+
+# 2. Build GWR input
+meta_df           <- merged_hkd@meta.data
+meta_df$Barcode   <- rownames(meta_df)
+meta_df$log10_UMI <- log10(meta_df$nCount_Spatial + 1)
+gwr_data          <- merge(meta_df, all_coords, by = "Barcode")
+
+gwr_input <- data.frame(
+  Barcode    = gwr_data$Barcode,
+  Sample     = as.character(gwr_data$orig.ident),
+  x          = gwr_data$final_x,
+  y          = gwr_data$final_y,
+  Y_Fibrosis = gwr_data$Fibrosis_Score,
+  X_M2       = gwr_data$M2Mac_fraction,
+  Cov_logUMI = gwr_data$log10_UMI
+) %>% na.omit()
+
+cat("=== GWR Input Check ===\n")
+cat("Samples:", length(unique(gwr_input$Sample)), "\n")
+cat("Rows      :", nrow(gwr_input), "\n")
+print(summary(gwr_input$Y_Fibrosis))
+
+required_cols <- c("Y_Fibrosis", "X_M2", "Cov_logUMI")
+missing_cols  <- setdiff(required_cols, colnames(gwr_input))
+if (length(missing_cols) > 0) {
+  stop(paste("STOP! missing columns:", paste(missing_cols, collapse = ", ")))
+} else {
+  print("OK: all required columns are present.")
+}
+
+# 3. Run GWR loop
+gwr_results_list <- list()
+unique_samples   <- unique(gwr_input$Sample)
+
+print("Running GWR (MYOF v2 fixed × HKD only)...")
+
+for (s in unique_samples) {
+  sub_data <- subset(gwr_input, Sample == s)
+  if (nrow(sub_data) < 50) {
+    cat("Skip:", s, "(too few spots)\n"); next
+  }
+  print(paste("Processing:", s, "| Spots:", nrow(sub_data)))
+
+  sp_sub <- sub_data
+  coordinates(sp_sub) <- ~x + y
+
+  tryCatch({
+    bw    <- bw.gwr(f_main, data = sp_sub,
+                    approach = "AIC", kernel = "bisquare", adaptive = TRUE)
+    model <- gwr.basic(f_main, data = sp_sub,
+                       bw = bw, kernel = "bisquare", adaptive = TRUE)
+    res   <- as.data.frame(model$SDF)
+
+    raw_p <- 2 * (1 - pnorm(abs(res$X_M2_TV)))
+    adj_p <- p.adjust(raw_p, method = "BH")
+
+    gwr_results_list[[s]] <- data.frame(
+      Barcode  = sub_data$Barcode,
+      Sample   = s,
+      M2_Coeff = res$X_M2,
+      M2_AdjP  = adj_p,
+      M2_t_val = res$X_M2_TV
+    )
+    cat("  Done: bw =", bw, "\n")
+  }, error = function(e) { print(paste("Error:", s, e$message)) })
+}
+
+cat("\nGWR complete:", length(gwr_results_list), "/",
+    length(unique_samples), "samples\n")
+# 4. Store results in merged_hkd
+final_results           <- do.call(rbind, gwr_results_list)
+rownames(final_results) <- final_results$Barcode
+ 
+target_barcodes <- rownames(merged_hkd@meta.data)
+matched_indices <- match(target_barcodes, final_results$Barcode)
+ 
+merged_hkd$M2_Coeff <- final_results$M2_Coeff[matched_indices]
+merged_hkd$M2_AdjP  <- final_results$M2_AdjP[matched_indices]
+merged_hkd$M2_t_val <- final_results$M2_t_val[matched_indices]
+ 
+print("Metadata securely updated.")
+ 
+# count high-coupling spots
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+ 
+sig_summary <- merged_hkd@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(
+    n_Analyzed       = sum(!is.na(M2_AdjP)),
+    n_HighCoupling   = sum(M2_Coeff > GWR_COEF_THRESHOLD &
+                           M2_AdjP  < GWR_FDR_THRESHOLD, na.rm = TRUE),
+    n_Reference      = n_Analyzed - n_HighCoupling,
+    Pct_HighCoupling = round(n_HighCoupling / n_Analyzed * 100, 1),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Pct_HighCoupling))
+ 
+print("=== High-Coupling Spot Summary (HKD) ===")
+print(sig_summary, n = 30)
+ 
+write.csv(sig_summary,
+          file.path(outdir, paste0("GWR_HighCouplingSummary_HKD_", timestamp, ".csv")),
+          row.names = FALSE)
+```
+
+```{r DEG_HKD}
+# 5. DEG analysis (KPMP HKD: HighCoupling vs Reference)
+#   - uses only GWR-evaluable spots (NA spots excluded)
+#   - paired design (~ SampleID + Condition)
+#   - with defensive checks
+
+# 5.1 select samples for analysis
+valid_samples <- sig_summary %>%
+  filter(n_HighCoupling >= MIN_PATHOGENIC_SPOTS,
+         n_Reference    >= MIN_BYSTANDER_SPOTS) %>%
+  pull(orig.ident)
+
+cat("Valid samples for DEG (n =", length(valid_samples), "):\n")
+print(valid_samples)
+
+if (length(valid_samples) < 2) {
+  stop("Fewer than 2 valid samples; DEG analysis requires at least 2.")
+}
+
+# 5.2 restrict to GWR-evaluable spots
+sub_obj <- subset(
+  merged_hkd,
+  subset = orig.ident %in% valid_samples &
+           !is.na(M2_Coeff) &
+           !is.na(M2_AdjP)
+)
+
+cat("Spots retained for DEG:", ncol(sub_obj), "\n")
+cat("Any NA in M2_Coeff?: ", any(is.na(sub_obj$M2_Coeff)), "\n")
+cat("Any NA in M2_AdjP?:  ", any(is.na(sub_obj$M2_AdjP)), "\n")
+
+# 5.3 build HighCoupling / Reference labels
+sub_obj$CouplingLabel <- ifelse(
+  sub_obj$M2_Coeff > GWR_COEF_THRESHOLD &
+  sub_obj$M2_AdjP  < GWR_FDR_THRESHOLD,
+  "HighCoupling",
+  "Reference"
+)
+
+# AggregateExpression auto-converts "_" to "-", so build with "-" from the start
+sub_obj$pseudo_group <- paste(sub_obj$orig.ident, sub_obj$CouplingLabel, sep = "-")
+
+print("--- CouplingLabel counts ---")
+print(table(sub_obj$CouplingLabel, useNA = "ifany"))
+
+# unexpected-NA check (should be 0, since NA spots are already excluded)
+if (any(grepl("-NA$", sub_obj$pseudo_group))) {
+  stop("pseudo_group contains *-NA; check the NA-exclusion step.")
+}
+
+# 5.4 build pseudobulk counts
+print("Aggregating expression data...")
+agg_data <- AggregateExpression(
+  sub_obj,
+  group.by      = "pseudo_group",
+  assays        = "Spatial",
+  slot          = "counts",
+  return.seurat = FALSE
+)
+
+counts_matrix <- agg_data$Spatial
+
+print("--- counts_matrix columns ---")
+print(colnames(counts_matrix))
+
+# check for unexpected columns
+unexpected_cols <- colnames(counts_matrix)[
+  !grepl("-HighCoupling$", colnames(counts_matrix)) &
+  !grepl("-Reference$",    colnames(counts_matrix))
+]
+
+if (length(unexpected_cols) > 0) {
+  stop(
+    paste("Unexpected column names in counts_matrix:",
+          paste(unexpected_cols, collapse = ", "))
+  )
+}
+
+# 5.5 build targets metadata
+sample_names <- colnames(counts_matrix)
+
+conditions <- ifelse(
+  grepl("-HighCoupling$", sample_names), "HighCoupling",
+  ifelse(grepl("-Reference$", sample_names), "Reference", NA)
+)
+
+if (any(is.na(conditions))) {
+  stop("Condition contains NA; check the column-name format.")
+}
+
+ids <- sample_names
+ids <- sub("-HighCoupling$", "", ids)
+ids <- sub("-Reference$",    "", ids)
+
+targets <- data.frame(
+  row.names = sample_names,
+  SampleID  = factor(ids),
+  Condition = factor(conditions, levels = c("Reference", "HighCoupling"))
+)
+
+print("--- targets ---")
+print(targets)
+cat("Condition counts:", table(targets$Condition), "\n")
+cat("SampleID counts :", table(targets$SampleID), "\n")
+
+# verify paired design
+pair_tab <- table(targets$SampleID, targets$Condition)
+print("--- Pair table ---")
+print(pair_tab)
+
+if (any(rowSums(pair_tab > 0) < 2)) {
+  stop("Some SampleIDs lack both HighCoupling and Reference conditions.")
+}
+
+# 5.6 run edgeR
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+y      <- DGEList(counts = counts_matrix, group = targets$Condition)
+y      <- calcNormFactors(y)
+
+design <- model.matrix(~ SampleID + Condition, data = targets)
+print("--- design matrix colnames ---")
+print(colnames(design))
+cat("Degrees of freedom:", nrow(targets) - ncol(design), "\n")
+
+y      <- estimateDisp(y, design, robust = TRUE)
+fit    <- glmQLFit(y, design, robust = TRUE)
+qlf    <- glmQLFTest(fit, coef = ncol(design))
+
+all_results <- topTags(qlf, n = Inf)$table
+sig_genes   <- all_results[all_results$FDR <= 0.05, ]
+sig_genes   <- sig_genes[order(sig_genes$logFC, decreasing = TRUE), ]
+
+cat("\n=== DEG Results HKD (HighCoupling vs Reference) ===\n")
+cat("Genes tested :", nrow(all_results), "\n")
+cat("FDR < 0.05    :", nrow(sig_genes), "\n")
+cat("Up (HighCoupling > Reference) :", sum(sig_genes$logFC > 0), "\n")
+cat("Down (HighCoupling < Reference) :", sum(sig_genes$logFC < 0), "\n")
+
+print(head(sig_genes, 20))
+
+write.csv(
+  all_results,
+  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_all_HKD_", timestamp, ".csv"))
+)
+write.csv(
+  sig_genes,
+  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_FDR0.05_HKD_", timestamp, ".csv"))
+)
+
+cat("Saved to:", outdir, "\n")
+```

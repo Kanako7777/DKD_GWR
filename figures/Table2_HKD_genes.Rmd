@@ -1,0 +1,203 @@
+---
+title: "Table 2"
+author: "Kanako Terakawa"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Generate a DEG table figure (gt) from a significant-gene CSV,
+# split into up- and down-regulated sections.
+library(gt)
+library(dplyr)
+
+create_deg_table <- function(csv_path,                    # CSV of significant genes (rownames = gene)
+                             output_dir,
+                             filename_base,                # output filename (no extension)
+                             figure_label = "Table 1",
+                             title_text   = NULL,
+                             cohort_label = "KPMP HKD cohort",
+                             footer_text  = NULL,
+                             save_html    = TRUE,
+                             save_png     = TRUE) {
+
+  # Load and split into up/down by logFC
+  df <- read.csv(csv_path, row.names = 1)
+  df$gene <- rownames(df)
+
+  up <- df %>%
+    dplyr::filter(logFC > 0) %>%
+    dplyr::arrange(dplyr::desc(logFC))
+  down <- df %>%
+    dplyr::filter(logFC < 0) %>%
+    dplyr::arrange(logFC)
+
+  n_up   <- nrow(up)
+  n_down <- nrow(down)
+
+  cat("Up   genes:", n_up,   "\n")
+  cat("Down genes:", n_down, "\n")
+
+  up_label   <- sprintf("Up in high-coupling spots (n = %d)",   n_up)
+  down_label <- sprintf("Down in high-coupling spots (n = %d)", n_down)
+
+  combined <- bind_rows(
+    up   %>% mutate(group = up_label),
+    down %>% mutate(group = down_label)
+  ) %>%
+    dplyr::select(group, gene, logFC, FDR)
+
+  # Default title / footer
+  if (is.null(title_text)) {
+    title_text <- sprintf(
+      "Significantly differentially expressed genes (FDR < 0.05; %d genes)",
+      n_up + n_down
+    )
+  }
+  if (is.null(footer_text)) {
+    footer_text <- paste0(
+      "log\u2082FC indicates HighCoupling / Reference. ",
+      "Pseudo-bulk DGE by edgeR with paired design (~ SampleID + Condition)."
+    )
+  }
+
+  # Color palette (matched to the volcano plots)
+  col_up_header   <- "#FBE5D6"   # pale vermillion
+  col_down_header <- "#D9E8F5"   # pale blue
+  col_border      <- "#000000"
+  col_label_bg    <- "#FFFFFF"
+
+  # Build gt table
+  gt_tbl <- combined %>%
+    gt(rowname_col = "gene", groupname_col = "group") %>%
+    fmt_number(
+      columns = "logFC",
+      decimals = 2,
+      force_sign = TRUE
+    ) %>%
+    fmt_scientific(
+      columns = "FDR",
+      decimals = 2
+    ) %>%
+    cols_label(
+      logFC = html("log<sub>2</sub>FC"),
+      FDR   = "FDR"
+    ) %>%
+    cols_align(align = "right", columns = c("logFC", "FDR")) %>%
+    cols_align(align = "left",  columns = "gene") %>%
+    tab_header(
+      title = md(sprintf("**%s.** %s — %s", figure_label, title_text, cohort_label))
+    ) %>%
+    tab_source_note(source_note = footer_text) %>%
+    tab_style(
+      style = cell_text(style = "italic"),
+      locations = cells_stub()
+    ) %>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = col_up_header),
+        cell_text(weight = "bold")
+      ),
+      locations = cells_row_groups(groups = up_label)
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = col_down_header),
+        cell_text(weight = "bold")
+      ),
+      locations = cells_row_groups(groups = down_label)
+    ) %>%
+
+  # Booktabs-style rules: top, header-bottom, and body-bottom only; no vertical or inner lines
+  tab_options(
+    table.font.size                  = 10,
+    table.font.names                 = "Arial",
+    table.background.color           = "white",
+    data_row.padding                 = px(3),
+    heading.title.font.size          = 12,
+    heading.align                    = "left",
+    source_notes.font.size           = 8,
+    source_notes.padding             = px(4),
+    column_labels.font.size          = 10,
+    column_labels.font.weight        = "bold",
+    column_labels.background.color   = col_label_bg,
+    column_labels.padding            = px(4),
+    row_group.padding                = px(4),
+    row_group.font.weight            = "bold",
+    table.border.top.style           = "solid",
+    table.border.top.width           = px(1.5),
+    table.border.top.color           = col_border,
+    table.border.bottom.style        = "solid",
+    table.border.bottom.width        = px(1.5),
+    table.border.bottom.color        = col_border,
+    table.border.left.style          = "none",
+    table.border.right.style         = "none",
+    column_labels.border.top.style   = "none",
+    column_labels.border.bottom.style = "solid",
+    column_labels.border.bottom.width = px(0.5),
+    column_labels.border.bottom.color = col_border,
+    table_body.border.top.style      = "none",
+    table_body.border.bottom.style   = "solid",
+    table_body.border.bottom.width   = px(1.5),
+    table_body.border.bottom.color   = col_border,
+    table_body.hlines.style          = "none",
+    table_body.vlines.style          = "none",
+    row_group.border.top.style       = "solid",
+    row_group.border.top.width       = px(0.5),
+    row_group.border.top.color       = col_border,
+    row_group.border.bottom.style    = "solid",
+    row_group.border.bottom.width    = px(0.5),
+    row_group.border.bottom.color    = col_border
+  )
+
+  # Save
+  dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+  if (save_html) {
+    html_path <- file.path(output_dir, paste0(filename_base, ".html"))
+    gtsave(gt_tbl, html_path)
+    cat("Saved HTML:", html_path, "\n")
+  }
+
+  if (save_png) {
+    png_path <- file.path(output_dir, paste0(filename_base, ".png"))
+    tryCatch({
+      gtsave(gt_tbl, png_path, expand = 5, zoom = 2)
+      cat("Saved PNG :", png_path, "\n")
+    }, error = function(e) {
+      cat("PNG export error:", e$message, "\n")
+      cat("-> requires the webshot2 package: install.packages('webshot2')\n")
+    })
+  }
+
+  pdf_path <- file.path(output_dir, paste0(filename_base, ".pdf"))
+  tryCatch({
+    gtsave(gt_tbl, pdf_path, expand = 5, zoom = 2)
+    cat("Saved PDF :", pdf_path, "\n")
+  }, error = function(e) {
+    cat("PDF export error:", e$message, "\n")
+    cat("-> requires webshot2 + Google Chrome\n")
+  })
+
+  return(gt_tbl)
+}
+
+# Example: KPMP HKD (Table 2)
+gt_hkd <- create_deg_table(
+  csv_path      = "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/HKD/EdgeR_HighCoupling_vs_Reference_FDR0.05_HKD_20260512_154220.csv",
+  output_dir    = "/path/to/KPMP_DKD_ST_project/figures_for_paper/Tables/",
+  filename_base = "Table_2_HKD_genes_table",
+  figure_label  = "Table 2",
+  cohort_label  = "KPMP HKD cohort",
+  footer_text   = "log\u2082FC indicates HighCoupling / Reference. Pseudo-bulk DGE by edgeR with paired design (~ SampleID + Condition), n = 9 paired samples."
+)
+
+print(gt_hkd)
+```

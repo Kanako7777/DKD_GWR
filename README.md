@@ -22,7 +22,6 @@ analysis/   Per-cohort analysis pipelines (QC -> deconvolution -> fibrosis score
 figures/    Figure and enrichment code (reads the saved analysis outputs)
   Fig1B_cohort_flow.Rmd      Cohort/sample flow diagram (Figure 1B)
   spatial_plots.Rmd          Per-spot M2/fibrosis/GWR/high-coupling maps
-                             (Figures 2-3, 5 and Supplementary Figures S1-S5)
   volcano_plots.Rmd          Pseudobulk DEG volcano plots
   GO_GSEA_enrichment.Rmd     GO BP and GSEA Hallmark (Figure 4B-D;
                              Supplementary Tables S4-S5)

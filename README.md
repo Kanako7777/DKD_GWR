@@ -15,9 +15,9 @@ and (2) generate all main and supplementary figures and tables.
 ```
 analysis/   Per-cohort analysis pipelines (QC -> deconvolution -> fibrosis score
             -> GWR -> pseudobulk DEG). Each script saves DEG result CSVs.
-  01_KPMP_DKD_primary.Rmd    Primary cohort (KPMP DKD)
+  01_KPMP_DKD.Rmd    Primary cohort (KPMP DKD)
   02_KPMP_HKD.Rmd            Cross-disease cohort (KPMP HKD)
-  03_Susztak_DKD_PoC.Rmd     Proof-of-concept cohort (Susztak/Abedini DKD)
+  03_PoC_DKD.Rmd     Proof-of-concept cohort (PoC DKD)
 
 figures/    Figure and enrichment code (reads the saved analysis outputs)
   Fig1B_cohort_flow.Rmd      Cohort/sample flow diagram (Figure 1B)
@@ -35,7 +35,7 @@ data/       Place input data here (not distributed; see data/README.md)
 
 Raw data are publicly available and must be downloaded separately:
 
-- **Susztak/Abedini DKD Visium ST** — GEO: GSE211785 (Abedini et al., Nat Genet 2024).
+- **PoC DKD Visium ST** — GEO: GSE211785 (Abedini et al., Nat Genet 2024).
 - **KPMP DKD and HKD Visium ST** — Kidney Precision Medicine Project (KPMP)
   repository, https://atlas.kpmp.org .
 - **KPMP single-cell RNA-seq reference atlas** — used for label transfer

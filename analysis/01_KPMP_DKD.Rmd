@@ -30,7 +30,7 @@ library(msigdbr)
 
 ```{r Data loading, Pre-processing, warning=FALSE}
 # Settings
-ROOT_DIR_DKD <- "/path/to/KPMP_DKD_ST_project/KPMP_DKD_ST_data"
+ROOT_DIR_DKD <- "/path/to/DKD_data"
 
 # put the downloaded DKD sample IDs here
 sampleNames_DKD <- c("27-10039", "27-10041", "27-10042", "27-10047", 
@@ -73,17 +73,18 @@ if (length(seurat_list_dkd) > 0) {
 ```
 
 ```{r outdir}
-outdir <- "/path/to/KPMP_DKD_ST_project/KPMP analysis for paper/DKD/"
+outdir <- "/path/to/DKD_results"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 ```
 
 ```{r fixed_params}
 # Fixed parameters (identical to the KPMP DKD analysis)
 FINAL_FIB_GENES <- c(
-  "ITGBL1", "INHBA", "NALCN", "LMOD1", "GLI2", "COL6A3", "ANO3",
-  "CARMN", "PRRX1", "PDLIM3", "ANO1", "THBS2", "SULF1", "DPYSL3",
-  "COL16A1", "COL5A1", "COL1A1", "NKD1", "ITGA11", "TRPC4", "EDNRA",
-  "GUCY1A2", "MYH11", "CDH11", "NTM", "RAMP1", "PRR16", "PTGIS", "SYNPO2"
+  "ITGBL1", "INHBA", "SULF1", "NALCN", "CARMN", "COL6A3",
+  "PDLIM3", "LMOD1", "MYH11", "DMD", "GLI2", "ANO3",
+  "IRAG1", "ADGRL3", "SYNPO2", "LAMA2", "ANO1", "DPYSL3",
+  "COL16A1", "NTM", "THBS2", "CDH11", "COL5A1", "COL1A1",
+  "GUCY1A2", "SORBS1", "PRRX1", "NKD1", "EDNRA", "MICAL2"
 )
 
 MAC_M2_SCORE_COL <- "prediction.score.MAC.M2"
@@ -106,6 +107,49 @@ cat("Fibrosis genes (n =", length(FINAL_FIB_GENES), "):",
     paste(FINAL_FIB_GENES, collapse = ", "), "\n")
 cat("GWR formula   :", GWR_FORMULA_STR, "\n")
 cat("QC nFeature   : >=", QC_MEDIAN_NFEATURE_MIN, "\n")
+```
+
+```{r reference}
+# Build the shared reference from raw counts; run this before analyses 02 and 03.
+h5ad_file <- "/path/to/reference_atlas.h5ad"
+ref_file <- "/path/to/ref_seurat.rds"
+read_h5_categorical <- function(h5, path) {
+  node <- h5[[path]]
+  if (inherits(node, "H5Group") && all(c("categories", "codes") %in% names(node))) {
+    categories <- as.character(node[["categories"]][])
+    codes <- as.integer(node[["codes"]][])
+    value <- rep(NA_character_, length(codes))
+    ok <- !is.na(codes) & codes >= 0
+    value[ok] <- categories[codes[ok] + 1L]
+    return(value)
+  }
+  as.character(node[])
+}
+raw_counts_ref <- open_matrix_anndata_hdf5(h5ad_file, group = "raw/X")
+h5 <- H5File$new(h5ad_file, mode = "r")
+index_name <- as.character(h5attr(h5[["obs"]], "_index"))[1]
+cell_ids_ref <- as.character(h5[[paste0("obs/", index_name)]][])
+gene_symbols_ref <- read_h5_categorical(h5, "raw/var/feature_name")
+subclass_l2_ref <- read_h5_categorical(h5, "obs/subclass.l2")
+donor_id_ref <- read_h5_categorical(h5, "obs/donor_id")
+h5$close_all()
+stopifnot(length(cell_ids_ref) == ncol(raw_counts_ref),
+          length(gene_symbols_ref) == nrow(raw_counts_ref),
+          length(subclass_l2_ref) == length(cell_ids_ref),
+          length(donor_id_ref) == length(cell_ids_ref),
+          !anyDuplicated(cell_ids_ref), !anyNA(gene_symbols_ref),
+          !anyNA(subclass_l2_ref), !anyNA(donor_id_ref))
+# Metadata and matrix columns follow the same H5AD observation index.
+rownames(raw_counts_ref) <- make.unique(gene_symbols_ref)
+colnames(raw_counts_ref) <- cell_ids_ref
+meta_ref <- data.frame(subclass.l2 = subclass_l2_ref, donor_id = donor_id_ref,
+                       row.names = cell_ids_ref)
+ref_seurat <- CreateSeuratObject(counts = raw_counts_ref, meta.data = meta_ref, assay = "RNA")
+ref_seurat <- NormalizeData(ref_seurat, normalization.method = "LogNormalize", scale.factor = 10000)
+ref_seurat <- FindVariableFeatures(ref_seurat, selection.method = "vst", nfeatures = 3000)
+ref_seurat <- ScaleData(ref_seurat, features = VariableFeatures(ref_seurat))
+ref_seurat <- RunPCA(ref_seurat, features = VariableFeatures(ref_seurat), npcs = 30, verbose = FALSE)
+saveRDS(ref_seurat, ref_file)
 ```
 
 ```{r QC~deconvulsion}
@@ -139,6 +183,8 @@ merged_dkd <- subset(merged_dkd,
 cat("Spots after QC:", ncol(merged_dkd), "\n")
 
 # Normalization -> PCA
+# Join raw-count layers before normalization.
+merged_dkd <- JoinLayers(merged_dkd, assay = "Spatial")
 merged_dkd <- NormalizeData(merged_dkd,
                             normalization.method = "LogNormalize",
                             scale.factor = 10000,
@@ -147,7 +193,7 @@ merged_dkd <- FindVariableFeatures(merged_dkd,
                                    selection.method = "vst",
                                    nfeatures = 2000)
 merged_dkd <- ScaleData(merged_dkd)
-merged_dkd <- RunPCA(merged_dkd, assay = "Spatial", verbose = FALSE)
+merged_dkd <- RunPCA(merged_dkd, assay = "Spatial", npcs = 30, verbose = FALSE)
 
 # Standardize sample names
 merged_dkd$orig.ident <- make.names(merged_dkd$orig.ident)
@@ -157,16 +203,14 @@ Idents(merged_dkd)    <- merged_dkd$orig.ident
 cat("Layers after normalize:", Layers(merged_dkd[["Spatial"]]), "\n")
 cat("Reductions:", Reductions(merged_dkd), "\n")
 
-# Deconvolution (assumes ref_seurat is already loaded)
-merged_dkd <- FindVariableFeatures(merged_dkd, nfeatures = 2000)
-merged_dkd <- ScaleData(merged_dkd)
-merged_dkd <- RunPCA(merged_dkd, verbose = FALSE)
-
+# Transfer cell-type labels from the shared reference.
 anchors <- FindTransferAnchors(
   reference            = ref_seurat,
   query                = merged_dkd,
   normalization.method = "LogNormalize",
   reference.reduction  = "pca",
+  reduction            = "pcaproject",
+  features             = VariableFeatures(ref_seurat),
   dims                 = 1:30
 )
 
@@ -177,6 +221,7 @@ predictions <- TransferData(
   dims             = 1:30
 )
 
+# M2Mac_fraction stores a prediction score.
 merged_dkd$M2Mac_fraction <- predictions[[MAC_M2_SCORE_COL]]
 cat("M2Mac_fraction summary:\n")
 print(summary(merged_dkd$M2Mac_fraction))
@@ -209,7 +254,8 @@ if (length(final_fib_genes) >= 5) {
   merged_dkd <- AddModuleScore(
     merged_dkd,
     features = list(final_fib_genes),
-    name     = "Fibrosis_Score"
+    name     = "Fibrosis_Score",
+    seed     = 1
   )
   merged_dkd$Fibrosis_Score  <- merged_dkd$Fibrosis_Score1
   merged_dkd$Fibrosis_Score1 <- NULL
@@ -225,16 +271,18 @@ if (length(final_fib_genes) >= 5) {
 ```{r GWR}
 # 1. Get coordinates (prefer grid coordinates)
 print("Extracting coordinates...")
-img_names <- Images(merged_seurat)
+img_names <- Images(merged_dkd)
 all_coords_list <- list()
 
 for (img in img_names) {
-  c_data <- GetTissueCoordinates(merged_seurat, image = img)
-  c_data$Barcode <- rownames(c_data) 
+  c_data <- GetTissueCoordinates(merged_dkd, image = img)
+  c_data$Barcode <- if ("cell" %in% colnames(c_data)) c_data$cell else rownames(c_data) 
   all_coords_list[[img]] <- c_data
 }
 
 all_coords <- do.call(rbind, all_coords_list)
+stopifnot(!anyDuplicated(all_coords$Barcode),
+          all(colnames(merged_dkd) %in% all_coords$Barcode))
 cols <- colnames(all_coords)
 y_col <- grep("row|y", cols, ignore.case = TRUE, value = TRUE)[1]
 x_col <- grep("col|x", cols, ignore.case = TRUE, value = TRUE)[1]
@@ -243,7 +291,7 @@ all_coords$final_x <- all_coords[[x_col]]
 all_coords$final_y <- all_coords[[y_col]]
 
 # 2'. Build GWR input (add logUMI)
-meta_df <- merged_seurat@meta.data
+meta_df <- merged_dkd@meta.data
 meta_df$Barcode <- rownames(meta_df)
 
 # log-transform UMI counts
@@ -330,24 +378,22 @@ sub_data <- subset(gwr_input, Sample == s)
 if (length(gwr_results_list) > 0) {
   final_results <- do.call(rbind, gwr_results_list)
   rownames(final_results) <- final_results$Barcode
-  path_spots    <- file.path(ROOT_DIR, "spots.csv")
-path_spots    <- file.path(ROOT_DIR, "spots.csv")
 
-# revised code
+# Match results to object barcodes
 # 1. key on the Barcode of the merged results (final_results)
 # 2. reorder to match the Seurat object's Barcode order
-target_barcodes <- rownames(merged_seurat@meta.data)
+target_barcodes <- rownames(merged_dkd@meta.data)
 matched_indices <- match(target_barcodes, final_results$Barcode)
 
 # 3. assign per column (non-matches become NA)
-merged_seurat$M2_Coeff <- final_results$M2_Coeff[matched_indices]
-merged_seurat$M2_AdjP  <- final_results$M2_AdjP[matched_indices]
-merged_seurat$M2_t_val <- final_results$M2_t_val[matched_indices]
+merged_dkd$M2_Coeff <- final_results$M2_Coeff[matched_indices]
+merged_dkd$M2_AdjP  <- final_results$M2_AdjP[matched_indices]
+merged_dkd$M2_t_val <- final_results$M2_t_val[matched_indices]
 
 print("Metadata securely updated.")
 
   # count high-coupling spots (e.g., ~400-600 for X29.10394 when successful)
-  sig_summary <- merged_seurat@meta.data %>%
+  sig_summary <- merged_dkd@meta.data %>%
     group_by(orig.ident) %>%
     summarise(n_HighCoupling = sum(M2_Coeff > 0 & M2_AdjP < 0.05, na.rm = TRUE)) %>%
     arrange(desc(n_HighCoupling))
@@ -361,7 +407,7 @@ print("Metadata securely updated.")
 # 5'. Prepare for DEG analysis
 
 # GWR result summary
-sig_summary <- merged_seurat@meta.data %>%
+sig_summary <- merged_dkd@meta.data %>%
   group_by(orig.ident) %>%
   summarise(
     n_Analyzed       = sum(!is.na(M2_AdjP)),
@@ -389,7 +435,7 @@ if (length(valid_samples) < 2) {
 
 # 5.5'. restrict to GWR-evaluable spots
 sub_obj <- subset(
-  merged_seurat,
+  merged_dkd,
   subset = orig.ident %in% valid_samples &
            !is.na(M2_Coeff) &
            !is.na(M2_AdjP)
@@ -472,7 +518,7 @@ targets <- data.frame(
 )
 
 # 6'. Run DEG analysis
-outdir <- "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD"
+outdir <- "/path/to/DKD_results"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -509,13 +555,20 @@ print(head(sig_genes, 20))
 # Save
 write.csv(
   all_results,
-  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_all_", timestamp, ".csv"))
+  file.path(outdir, "EdgeR_HighCoupling_vs_Reference_all.csv")
 )
 
 write.csv(
   sig_genes,
-  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_FDR0.05_", timestamp, ".csv"))
+  file.path(outdir, "EdgeR_HighCoupling_vs_Reference_FDR0.05.csv")
 )
 
 cat("Saved to:", outdir, "\n")
+
+# Save the analysis object and eligibility information for figure scripts.
+merged_dkd@misc$valid_samples <- valid_samples
+saveRDS(merged_dkd, file.path(outdir, "DKD_analysis.rds"))
+write.csv(sig_summary, file.path(outdir, "GWR_HighCouplingSummary.csv"), row.names = FALSE)
+write.csv(data.frame(SampleID = valid_samples), file.path(outdir, "DEG_samples.csv"), row.names = FALSE)
+capture.output(sessionInfo(), file = file.path(outdir, "sessionInfo.txt"))
 ```

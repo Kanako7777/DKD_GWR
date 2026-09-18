@@ -37,7 +37,7 @@ library(msigdbr)
 
 ```{r Data loading, Pre-processing, warning=FALSE}
 # Settings
-ROOT_DIR_HKD <- "/path/to/KPMP_DKD_ST_project/KPMP_HKD_ST_data"
+ROOT_DIR_HKD <- "/path/to/HKD_data"
 
 # put the downloaded HKD sample IDs here
 sampleNames_HKD <- c("27-10087", "27-10155", "27-10170", "28-12372", "28-12518",
@@ -78,17 +78,18 @@ if (length(seurat_list_hkd) > 0) {
 ```
 
 ```{r outdir}
-outdir <- "/path/to/KPMP_DKD_ST_project/KPMP analysis for paper/HKD/"
+outdir <- "/path/to/HKD_results"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 ```
 
 ```{r fixed_params}
 # Fixed parameters (identical to the KPMP DKD analysis)
 FINAL_FIB_GENES <- c(
-  "ITGBL1", "INHBA", "NALCN", "LMOD1", "GLI2", "COL6A3", "ANO3",
-  "CARMN", "PRRX1", "PDLIM3", "ANO1", "THBS2", "SULF1", "DPYSL3",
-  "COL16A1", "COL5A1", "COL1A1", "NKD1", "ITGA11", "TRPC4", "EDNRA",
-  "GUCY1A2", "MYH11", "CDH11", "NTM", "RAMP1", "PRR16", "PTGIS", "SYNPO2"
+  "ITGBL1", "INHBA", "SULF1", "NALCN", "CARMN", "COL6A3",
+  "PDLIM3", "LMOD1", "MYH11", "DMD", "GLI2", "ANO3",
+  "IRAG1", "ADGRL3", "SYNPO2", "LAMA2", "ANO1", "DPYSL3",
+  "COL16A1", "NTM", "THBS2", "CDH11", "COL5A1", "COL1A1",
+  "GUCY1A2", "SORBS1", "PRRX1", "NKD1", "EDNRA", "MICAL2"
 )
 
 MAC_M2_SCORE_COL <- "prediction.score.MAC.M2"
@@ -111,6 +112,14 @@ cat("Fibrosis genes (n =", length(FINAL_FIB_GENES), "):",
     paste(FINAL_FIB_GENES, collapse = ", "), "\n")
 cat("GWR formula   :", GWR_FORMULA_STR, "\n")
 cat("QC nFeature   : >=", QC_MEDIAN_NFEATURE_MIN, "\n")
+```
+
+```{r reference}
+# Reuse the shared reference prepared in 01_KPMP_DKD.Rmd.
+ref_seurat <- readRDS("/path/to/ref_seurat.rds")
+DefaultAssay(ref_seurat) <- "RNA"
+stopifnot("subclass.l2" %in% colnames(ref_seurat@meta.data),
+          "pca" %in% Reductions(ref_seurat))
 ```
 
 ```{r QC~deconvulsion}
@@ -144,6 +153,8 @@ merged_hkd <- subset(merged_hkd,
 cat("Spots after QC:", ncol(merged_hkd), "\n")
 
 # Normalization -> PCA
+# Join raw-count layers before normalization.
+merged_hkd <- JoinLayers(merged_hkd, assay = "Spatial")
 merged_hkd <- NormalizeData(merged_hkd,
                             normalization.method = "LogNormalize",
                             scale.factor = 10000,
@@ -152,7 +163,7 @@ merged_hkd <- FindVariableFeatures(merged_hkd,
                                    selection.method = "vst",
                                    nfeatures = 2000)
 merged_hkd <- ScaleData(merged_hkd)
-merged_hkd <- RunPCA(merged_hkd, assay = "Spatial", verbose = FALSE)
+merged_hkd <- RunPCA(merged_hkd, assay = "Spatial", npcs = 30, verbose = FALSE)
 
 # Standardize sample names
 merged_hkd$orig.ident <- make.names(merged_hkd$orig.ident)
@@ -162,16 +173,14 @@ Idents(merged_hkd)    <- merged_hkd$orig.ident
 cat("Layers after normalize:", Layers(merged_hkd[["Spatial"]]), "\n")
 cat("Reductions:", Reductions(merged_hkd), "\n")
 
-# Deconvolution (assumes ref_seurat is already loaded)
-merged_hkd <- FindVariableFeatures(merged_hkd, nfeatures = 2000)
-merged_hkd <- ScaleData(merged_hkd)
-merged_hkd <- RunPCA(merged_hkd, verbose = FALSE)
-
+# Transfer cell-type labels from the shared reference.
 anchors <- FindTransferAnchors(
   reference            = ref_seurat,
   query                = merged_hkd,
   normalization.method = "LogNormalize",
   reference.reduction  = "pca",
+  reduction            = "pcaproject",
+  features             = VariableFeatures(ref_seurat),
   dims                 = 1:30
 )
 
@@ -182,6 +191,7 @@ predictions <- TransferData(
   dims             = 1:30
 )
 
+# M2Mac_fraction stores a prediction score.
 merged_hkd$M2Mac_fraction <- predictions[[MAC_M2_SCORE_COL]]
 cat("M2Mac_fraction summary:\n")
 print(summary(merged_hkd$M2Mac_fraction))
@@ -214,7 +224,8 @@ if (length(final_fib_genes) >= 5) {
   merged_hkd <- AddModuleScore(
     merged_hkd,
     features = list(final_fib_genes),
-    name     = "Fibrosis_Score"
+    name     = "Fibrosis_Score",
+    seed     = 1
   )
   merged_hkd$Fibrosis_Score  <- merged_hkd$Fibrosis_Score1
   merged_hkd$Fibrosis_Score1 <- NULL
@@ -234,11 +245,13 @@ all_coords_list <- list()
 
 for (img in img_names) {
   c_data         <- GetTissueCoordinates(merged_hkd, image = img)
-  c_data$Barcode <- rownames(c_data)
+  c_data$Barcode <- if ("cell" %in% colnames(c_data)) c_data$cell else rownames(c_data)
   all_coords_list[[img]] <- c_data
 }
 
 all_coords <- do.call(rbind, all_coords_list)
+stopifnot(!anyDuplicated(all_coords$Barcode),
+          all(colnames(merged_hkd) %in% all_coords$Barcode))
 cols  <- colnames(all_coords)
 y_col <- grep("row|y", cols, ignore.case = TRUE, value = TRUE)[1]
 x_col <- grep("col|x", cols, ignore.case = TRUE, value = TRUE)[1]
@@ -492,12 +505,19 @@ print(head(sig_genes, 20))
 
 write.csv(
   all_results,
-  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_all_HKD_", timestamp, ".csv"))
+  file.path(outdir, "EdgeR_HighCoupling_vs_Reference_all.csv")
 )
 write.csv(
   sig_genes,
-  file.path(outdir, paste0("EdgeR_HighCoupling_vs_Reference_FDR0.05_HKD_", timestamp, ".csv"))
+  file.path(outdir, "EdgeR_HighCoupling_vs_Reference_FDR0.05.csv")
 )
 
 cat("Saved to:", outdir, "\n")
+
+# Save the analysis object and eligibility information for figure scripts.
+merged_hkd@misc$valid_samples <- valid_samples
+saveRDS(merged_hkd, file.path(outdir, "HKD_analysis.rds"))
+write.csv(sig_summary, file.path(outdir, "GWR_HighCouplingSummary.csv"), row.names = FALSE)
+write.csv(data.frame(SampleID = valid_samples), file.path(outdir, "DEG_samples.csv"), row.names = FALSE)
+capture.output(sessionInfo(), file = file.path(outdir, "sessionInfo.txt"))
 ```

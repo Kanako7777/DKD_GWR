@@ -8,12 +8,20 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r analysis_inputs}
+library(Seurat)
+merged_seurat <- readRDS("/path/to/DKD_results/DKD_analysis.rds")
+merged_hkd <- readRDS("/path/to/HKD_results/HKD_analysis.rds")
+```
+
+
+
 
 ```{r Figure 2B Volcano_Plot}
 #   - Universal-design palette (CVD-safe)
 #   - built from any DEG CSV (all_results)
 #   - labels the top N up- and down-regulated genes
-#   - reusable for Susztak DKD (Fig 2B), KPMP DKD (Fig 3A), and HKD
+#   - reusable for PoC DKD (Fig 2B), KPMP DKD (Fig 3A), and HKD
 
 library(ggplot2)
 library(ggrepel)
@@ -161,16 +169,16 @@ create_volcano_plot <- function(csv_path,
 
 # Examples
 
-# ---- Fig 2B: Susztak DKD Proof-of-Concept ----
-p_susztak <- create_volcano_plot(
-  csv_path      = "/path/to/KPMP_DKD_ST_project/analysis_for_paper/Susztak/EdgeR_HighCoupling_vs_Reference_all_DKDonly_20260512_170847.csv",
-  output_dir    = "/path/to/KPMP_DKD_ST_project/figures_for_paper/Volcano/",
-  filename_base = "Figure_2B_Volcano_Susztak_DKD",
-  title_text    = "Proof-of-Concept Cohort (n = 3 paired samples)",
+# ---- Fig 2B: PoC DKD Proof-of-Concept ----
+p_poc <- create_volcano_plot(
+  csv_path      = "/path/to/PoC_results/EdgeR_HighCoupling_vs_Reference_all.csv",
+  output_dir    = "/path/to/Volcano_figures",
+  filename_base = "Figure_2B_Volcano_PoC_DKD",
+  title_text    = "Proof-of-Concept Cohort (n = 4 paired samples)",
   label_top_n   = 10,
   label_lfc_min = 0.5
 )
-print(p_susztak)
+print(p_poc)
 ```
 
 
@@ -322,10 +330,10 @@ create_volcano_plot <- function(csv_path,
 }
 
 p_kpmp_dkd <- create_volcano_plot(
-  csv_path      = "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/DKD/EdgeR_HighCoupling_vs_Reference_all_20260512_124736.csv",
-  output_dir    = "/path/to/KPMP_DKD_ST_project/figures_for_paper/Volcano/",
+  csv_path      = "/path/to/DKD_results/EdgeR_HighCoupling_vs_Reference_all.csv",
+  output_dir    = "/path/to/Volcano_figures",
   filename_base = "Figure_4A_Volcano_KPMP_DKD",
-  title_text    = "KPMP DKD Cohort (n = 14 paired samples)",
+  title_text    = "KPMP DKD Cohort (n = 15 paired samples)",
   label_top_n   = 5,
   y_cap         = 8.5      # added
 )
@@ -355,13 +363,9 @@ library(abind)
 # settings
 SEURAT_OBJ <- merged_seurat       # KPMP DKD object
 
-valid_samples <- c(
-  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
-  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
-  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
-)
+valid_samples <- SEURAT_OBJ@misc$valid_samples
 
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+out_dir <- "/path/to/DKD_figures"
 
 HE_ALPHA     <- 0.4
 DOT_SIZE     <- 2.0  
@@ -557,7 +561,7 @@ cat("Saved in:", out_dir, "\n")
 
 
 ```{r **Figure_5_KPMP_HKD_Spatial_v8_FIXROTATION**}
-# Figure 5: KPMP HKD Spatial Plot v8 (rotation-corrected)
+# Figure 5: KPMP HKD Spatial Plot v8 (image orientation)
 #   - adds VisiumV2 x/y swap to v7
 #   - VisiumV2: x = pixel_row (vertical), y = pixel_col (horizontal)
 
@@ -574,13 +578,9 @@ library(abind)
 # settings
 SEURAT_OBJ <- merged_hkd
 
-valid_samples <- c(
-  "X31.10063", "X31.10221", "X31.10336",
-  "X28.12518", "X29.10410", "X28.12613",
-  "X31.10090", "X29.10400", "X31.10219"
-)
+valid_samples <- SEURAT_OBJ@misc$valid_samples
 
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_HKD/"
+out_dir <- "/path/to/HKD_figures"
 
 HE_ALPHA     <- 0.4
 DOT_SIZE     <- 2.0    
@@ -782,13 +782,9 @@ library(abind)
 # Settings
 SEURAT_OBJ <- merged_seurat       # KPMP DKD object
 
-valid_samples <- c(
-  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
-  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
-  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
-)
+valid_samples <- SEURAT_OBJ@misc$valid_samples
 
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+out_dir <- "/path/to/DKD_figures"
 
 HE_ALPHA          <- 0.4
 DOT_SIZE          <- 2.0

@@ -7,6 +7,8 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+out_dir <- "/path/to/cohort_flow_figures"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -33,7 +35,7 @@ library(grid)   # unit(), arrow()
 base_family <- ""   # "" = default sans; set to "Arial"/"Helvetica" if available
 
 # PARAMETERS ------------------------------------------------------------------
-col_x   <- c(Susztak = 2, KPMP_DKD = 5.5, KPMP_HKD = 9)  # column centres (pitch 3)
+col_x   <- c(PoC = 2, KPMP_DKD = 5.5, KPMP_HKD = 9)  # column centres (pitch 3)
 box_w   <- 2.8                                          # box width
 # row centres (top -> bottom) and heights
 y_head  <- 6.4; h_head <- 0.60
@@ -44,22 +46,22 @@ corner_r <- 0.13                                        # rounded-corner radius
 
 # cohort palette: header (solid + white text), border, light tint, dark text
 pal <- list(
-  Susztak  = list(header = "#1F3864", border = "#1F3864", tint = "#E8EEF6", text = "#1F3864"),
+  PoC  = list(header = "#1F3864", border = "#1F3864", tint = "#E8EEF6", text = "#1F3864"),
   KPMP_DKD = list(header = "#ED7D31", border = "#C55A11", tint = "#FBE9DA", text = "#B5560F"),
   KPMP_HKD = list(header = "#138D75", border = "#0E6B58", tint = "#E0F0EC", text = "#0E6B58")
 )
-header_label <- c(Susztak = "Susztak DKD cohort",
+header_label <- c(PoC = "PoC DKD cohort",
                   KPMP_DKD = "KPMP DKD cohort",
                   KPMP_HKD = "KPMP HKD cohort")
 
 # sample numbers per cohort
 nums <- data.frame(
-  cohort   = c("Susztak", "KPMP_DKD", "KPMP_HKD"),
+  cohort   = c("PoC", "KPMP_DKD", "KPMP_HKD"),
   total    = c(6, 30, 27),
   passqc   = c(6, 29, 23),
-  deg      = c(3, 14,  9),
+  deg      = c(4, 15,  9),
   qc_excl  = c(NA, 1,  4),    # NA = no QC exclusion (no label drawn)
-  deg_excl = c(3, 15, 14),
+  deg_excl = c(2, 14, 14),
   stringsAsFactors = FALSE
 )
 
@@ -190,9 +192,9 @@ print(p)
 
 # Save ------------------------------------------------------------------------
 ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
-ggsave(sprintf("Fig1B_cohort_sample_flow_%s.png", ts), p,
+ggsave(file.path(out_dir, sprintf("Fig1B_cohort_sample_flow_%s.png", ts)), p,
        width = 10, height = 6.9, dpi = 300, bg = "white")
-ggsave(sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts), p,
+ggsave(file.path(out_dir, sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts)), p,
        width = 10, height = 6.9, bg = "white")
 
 message("Saved Fig1B_cohort_sample_flow_", ts, ".png / .pdf")
@@ -222,7 +224,7 @@ base_family <- ""   # set to "Arial" or "Helvetica" if available
 
 # Column centers
 col_x <- c(
-  Susztak  = 2.0,
+  PoC  = 2.0,
   KPMP_DKD = 5.4,
   KPMP_HKD = 8.8
 )
@@ -254,7 +256,7 @@ y_top    <- 7.55
 # Colors
 
 pal <- list(
-  Susztak = list(
+  PoC = list(
     header = "#1F3864",
     border = "#1F3864",
     tint   = "#E8EEF6",
@@ -275,7 +277,7 @@ pal <- list(
 )
 
 header_label <- c(
-  Susztak  = "Published DKD cohort",
+  PoC  = "Published DKD cohort",
   KPMP_DKD = "KPMP DKD cohort",
   KPMP_HKD = "KPMP HKD cohort"
 )
@@ -283,12 +285,12 @@ header_label <- c(
 # Sample numbers
 
 nums <- data.frame(
-  cohort   = c("Susztak", "KPMP_DKD", "KPMP_HKD"),
+  cohort   = c("PoC", "KPMP_DKD", "KPMP_HKD"),
   total    = c(6, 30, 27),
   passqc   = c(6, 29, 23),
-  deg      = c(3, 14, 9),
+  deg      = c(4, 15, 9),
   qc_excl  = c(NA, 1, 4),
-  deg_excl = c(3, 15, 14),
+  deg_excl = c(2, 14, 14),
   stringsAsFactors = FALSE
 )
 
@@ -606,7 +608,7 @@ print(p)
 ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
 
 ggsave(
-  filename = sprintf("Fig1B_cohort_sample_flow_%s.png", ts),
+  filename = file.path(out_dir, sprintf("Fig1B_cohort_sample_flow_%s.png", ts)),
   plot = p,
   width = 10.5,
   height = 6.8,
@@ -615,7 +617,7 @@ ggsave(
 )
 
 ggsave(
-  filename = sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts),
+  filename = file.path(out_dir, sprintf("Fig1B_cohort_sample_flow_%s.pdf", ts)),
   plot = p,
   width = 10.5,
   height = 6.8,

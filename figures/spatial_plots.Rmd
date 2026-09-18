@@ -8,6 +8,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r analysis_inputs}
+library(Seurat)
+merged_seurat <- readRDS("/path/to/DKD_results/DKD_analysis.rds")
+merged_hkd <- readRDS("/path/to/HKD_results/HKD_analysis.rds")
+poc <- readRDS("/path/to/PoC_results/PoC_analysis.rds")
+```
+
+
+
 
 ```{r Fig2A-D_panels}
 # Fig2A-D Spatial 4-panel plot
@@ -28,9 +37,9 @@ suppressPackageStartupMessages({
 
 # Settings
 
-valid_samples <- c("HK2529_ST", "HK2877_ST", "HK2844_ST")
+valid_samples <- poc@misc$valid_samples
 
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/Proof-of-Concept cohort/"
+out_dir <- "/path/to/PoC_figures"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -68,11 +77,11 @@ GWR_COEF_CAP <- 5
 # Image -> Sample lookup
 
 img_sample_map <- data.frame(
-  image = Images(susz),
-  sample = sapply(Images(susz), function(img) {
+  image = Images(poc),
+  sample = sapply(Images(poc), function(img) {
     unique(
-      susz$orig.ident[
-        colnames(susz) %in% rownames(susz@images[[img]]@coordinates)
+      poc$orig.ident[
+        colnames(poc) %in% Cells(poc[[img]])
       ]
     )[1]
   }),
@@ -83,16 +92,16 @@ print(img_sample_map)
 
 # Spot label
 
-susz$Spot_Label <- ifelse(
-  !is.na(susz$M2_Coeff) & susz$M2_Coeff > 0 & susz$M2_AdjP < 0.05,
+poc$Spot_Label <- ifelse(
+  !is.na(poc$M2_Coeff) & poc$M2_Coeff > 0 & poc$M2_AdjP < 0.05,
   "High-coupling",
   "Reference"
 )
 
-susz$Spot_Label[is.na(susz$M2_Coeff)] <- "NA"
+poc$Spot_Label[is.na(poc$M2_Coeff)] <- "NA"
 
-susz$Spot_Label <- factor(
-  susz$Spot_Label,
+poc$Spot_Label <- factor(
+  poc$Spot_Label,
   levels = c("High-coupling", "Reference", "NA")
 )
 
@@ -321,12 +330,12 @@ for (target_sample in valid_samples) {
   img <- img[1]
   cat("  Image:", img, "\n")
   
-  HE_info <- get_HE_layer(susz, img, alpha = HE_ALPHA)
+  HE_info <- get_HE_layer(poc, img, alpha = HE_ALPHA)
   
-  coords_s <- GetTissueCoordinates(susz, image = img) %>%
-    rownames_to_column("Barcode") %>%
+  coords_s <- GetTissueCoordinates(poc, image = img) %>%
+    mutate(Barcode = if ("cell" %in% colnames(.)) cell else rownames(.)) %>%
     left_join(
-      susz@meta.data %>%
+      poc@meta.data %>%
         rownames_to_column("Barcode") %>%
         dplyr::select(
           Barcode,
@@ -501,13 +510,9 @@ suppressPackageStartupMessages({
 
 SEURAT_OBJ <- merged_seurat
 
-valid_samples <- c(
-  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
-  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
-  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
-)
+valid_samples <- SEURAT_OBJ@misc$valid_samples
  
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+out_dir <- "/path/to/DKD_figures"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # ---------- Plot appearance ----------
@@ -1082,13 +1087,9 @@ suppressPackageStartupMessages({
 
 SEURAT_OBJ <- merged_seurat
 
-valid_samples <- c(
-  "X29.10404", "X29.10408", "X27.10039", "X31.10081", "X29.10423",
-  "X27.10094", "X29.10394", "X27.10157", "X28.12265.C", "X29.10439",
-  "X29.10405", "X29.10282", "X28.12265.M", "X29.10016"
-)
+valid_samples <- SEURAT_OBJ@misc$valid_samples
 
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_DKD/"
+out_dir <- "/path/to/DKD_figures"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -1660,12 +1661,8 @@ suppressPackageStartupMessages({
 
 # Settings
 SEURAT_OBJ <- merged_hkd
-valid_samples <- c(
-  "X31.10063", "X31.10221", "X31.10336",
-  "X28.12518", "X29.10410", "X28.12613",
-  "X31.10090", "X29.10400", "X31.10219"
-)
-out_dir <- "/path/to/KPMP_DKD_ST_project/figures_for_paper/Spatial Plot/KPMP_HKD/"
+valid_samples <- SEURAT_OBJ@misc$valid_samples
+out_dir <- "/path/to/HKD_figures"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 
@@ -1692,7 +1689,7 @@ GWR_COEF_CAP <- 5
 
 cat("KPMP HKD cohort - Processing", length(valid_samples), "samples\n")
 
-# VisiumV2: x/y swap support + auto-rescale (rotation-corrected)
+# VisiumV2: x/y swap support + auto-rescale (image orientation)
 #   VisiumV2: x = pixel_row (vertical), y = pixel_col (horizontal) -> SWAP
 get_coords_std <- function(obj, img_name) {
   coords_raw <- GetTissueCoordinates(obj, image = img_name)

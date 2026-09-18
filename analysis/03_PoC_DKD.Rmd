@@ -37,11 +37,7 @@ set.seed(42)
 # 2. Paths
 
 ```{r paths}
-h5ad_file <- "/path/to/KPMP_DKD_ST_project/SIREN_project/KPMP_ref.h5ad"
-bp_dir    <- "/path/to/KPMP_DKD_ST_project/SIREN_project/KPMP_ref_bpcells_data"
-
-# output directory
-DIR_OUT <- "/path/to/KPMP_DKD_ST_project/analysis for paper/Susztak/"
+DIR_OUT <- "/path/to/PoC_results"
 dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
 ```
 
@@ -49,10 +45,11 @@ dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
 
 ```{r fixed_params}
 FINAL_FIB_GENES_DISCOVERY <- c(
-  "ITGBL1", "INHBA", "NALCN", "LMOD1", "GLI2", "COL6A3", "ANO3",
-  "CARMN", "PRRX1", "PDLIM3", "ANO1", "THBS2", "SULF1", "DPYSL3",
-  "COL16A1", "COL5A1", "COL1A1", "NKD1", "ITGA11", "TRPC4", "EDNRA",
-  "GUCY1A2", "MYH11", "CDH11", "NTM", "RAMP1", "PRR16", "PTGIS", "SYNPO2"
+  "ITGBL1", "INHBA", "SULF1", "NALCN", "CARMN", "COL6A3",
+  "PDLIM3", "LMOD1", "MYH11", "DMD", "GLI2", "ANO3",
+  "IRAG1", "ADGRL3", "SYNPO2", "LAMA2", "ANO1", "DPYSL3",
+  "COL16A1", "NTM", "THBS2", "CDH11", "COL5A1", "COL1A1",
+  "GUCY1A2", "SORBS1", "PRRX1", "NKD1", "EDNRA", "MICAL2"
 )
 
 MAC_M2_SCORE_COL <- "prediction.score.MAC.M2"
@@ -78,29 +75,56 @@ cat("QC nFeature   : >=", QC_MEDIAN_NFEATURE_MIN, "\n")
 
 # 4. Data Loading — DKD Only
 
-```{r load_susztak}
-message("Loading Susztak Lab Seurat object...")
-susz <- readRDS("/path/to/KPMP_DKD_ST_project/HK.ST.NG.rds")
-message("Loaded: ", ncol(susz), " spots × ", nrow(susz), " genes")
-
-# DKD cases only
-disease_samples <- c(
-  "HK2529_ST", "HK2844_ST", "HK2873_ST",
-  "HK2877_ST", "HK3035_ST", "HK3437_ST"
+```{r load_poc}
+# Raw Space Ranger outputs for the six DKD samples.
+SR_DIRS <- c(
+  HK2529_ST = "/path/to/HK2529_ST/outs",
+  HK2844_ST = "/path/to/HK2844_ST/outs",
+  HK2873_ST = "/path/to/HK2873_ST/outs",
+  HK2877_ST = "/path/to/HK2877_ST/outs",
+  HK3035_ST = "/path/to/HK3035_ST/outs",
+  HK3437_ST = "/path/to/HK3437_ST/outs"
 )
-
-cat("\nDKD-only analysis (n =", length(disease_samples), "samples)\n")
-cat("Samples:", paste(disease_samples, collapse = ", "), "\n")
-cat("\n=== Sample × Status (full object) ===\n")
-print(table(susz$orig.ident, susz$Status))
+disease_samples <- names(SR_DIRS)
+# Stage coordinate files under the name matching their header format.
+# Original input files are not modified.
+seurat_list_poc <- list()
+for (sid in disease_samples) {
+  src <- SR_DIRS[[sid]]
+  staged <- tempfile(paste0(sid, "_"))
+  dir.create(file.path(staged, "spatial"), recursive = TRUE)
+  h5_path <- file.path(src, "filtered_feature_bc_matrix.h5")
+  stopifnot(file.exists(h5_path),
+            file.copy(h5_path, file.path(staged, basename(h5_path))))
+  spatial_files <- list.files(file.path(src, "spatial"), full.names = TRUE)
+  position_file <- spatial_files[grepl("^tissue_positions", basename(spatial_files))]
+  stopifnot(length(position_file) == 1)
+  for (f in setdiff(spatial_files, position_file)) {
+    stopifnot(file.copy(f, file.path(staged, "spatial", basename(f))))
+  }
+  has_header <- grepl("^barcode", readLines(position_file, n = 1), ignore.case = TRUE)
+  position_name <- if (has_header) "tissue_positions.csv" else "tissue_positions_list.csv"
+  stopifnot(file.copy(position_file, file.path(staged, "spatial", position_name)))
+  obj <- Load10X_Spatial(data.dir = staged, filename = "filtered_feature_bc_matrix.h5", slice = sid)
+  counts <- GetAssayData(obj, assay = "Spatial", layer = "counts")
+  stopifnot(inherits(counts, "dgCMatrix"), all(is.finite(counts@x)),
+            all(counts@x >= 0), all(counts@x == round(counts@x)))
+  obj$orig.ident <- sid
+  obj$disease <- "DKD"
+  seurat_list_poc[[sid]] <- obj
+}
+poc <- merge(seurat_list_poc[[1]], y = seurat_list_poc[-1])
+rm(seurat_list_poc)
+DefaultAssay(poc) <- "Spatial"
+message("Loaded: ", ncol(poc), " spots x ", nrow(poc), " genes")
 ```
 
 # 5. QC & Filtering
 
 ```{r qc}
-susz[["percent.mt"]] <- PercentageFeatureSet(susz, pattern = "^MT-")
+poc[["percent.mt"]] <- PercentageFeatureSet(poc, pattern = "^MT-")
 
-sample_qc_stats <- susz@meta.data %>%
+sample_qc_stats <- poc@meta.data %>%
   filter(orig.ident %in% disease_samples) %>%
   group_by(orig.ident) %>%
   summarise(
@@ -124,36 +148,41 @@ keep_samples <- sample_qc_stats %>%
 cat("\nKeeping samples:", length(keep_samples), "/", length(disease_samples), "\n")
 print(keep_samples)
 
-keep_barcodes <- colnames(susz)[
-  susz$orig.ident %in% keep_samples &
-  susz$nFeature_Spatial > QC_SPOT_NFEATURE_MIN &
-  susz$percent.mt       < QC_SPOT_MITO_MAX
+keep_barcodes <- colnames(poc)[
+  poc$orig.ident %in% keep_samples &
+  poc$nFeature_Spatial > QC_SPOT_NFEATURE_MIN &
+  poc$percent.mt       < QC_SPOT_MITO_MAX
 ]
+# Apply sample and spot QC before normalization.
+poc <- subset(poc, cells = keep_barcodes)
 cat("Spots after QC:", length(keep_barcodes), "\n")
 ```
 
 # 6. Normalization & PCA
 
 ```{r preprocess}
-DefaultAssay(susz) <- "Spatial"
+DefaultAssay(poc) <- "Spatial"
 
-susz <- NormalizeData(susz,
+# Join raw-count layers before normalization.
+poc <- JoinLayers(poc, assay = "Spatial")
+poc <- NormalizeData(poc,
                       normalization.method = "LogNormalize",
                       scale.factor = 10000,
                       assay = "Spatial")
-susz <- FindVariableFeatures(susz,
+poc <- FindVariableFeatures(poc,
                               selection.method = "vst",
                               nfeatures = 2000,
                               assay = "Spatial")
-susz <- ScaleData(susz)
-susz <- RunPCA(susz,
+poc <- ScaleData(poc)
+poc <- RunPCA(poc,
                assay = "Spatial",
                verbose = FALSE,
-               reduction.name = "pca_spatial")
+               npcs = 30,
+               reduction.name = "pca")
 
 # Standardize sample names
-new_idents      <- make.names(susz$orig.ident)
-susz$orig.ident <- new_idents
+new_idents      <- make.names(poc$orig.ident)
+poc$orig.ident <- new_idents
 keep_samples    <- make.names(keep_samples)
 disease_samples <- make.names(disease_samples)
 
@@ -164,140 +193,73 @@ print(keep_samples)
 # 7. KPMP Reference Loading
 
 ```{r load_kpmp_ref}
-if (!dir.exists(bp_dir)) {
-  message("Converting h5ad to BPCells format...")
-  raw_counts <- open_matrix_anndata_hdf5(h5ad_file)
-  write_matrix_dir(mat = raw_counts, dir = bp_dir)
-}
-
-bp_counts  <- open_matrix_dir(dir = bp_dir)
-ref_seurat <- CreateSeuratObject(counts = bp_counts)
-cat("Reference loaded:", ncol(ref_seurat), "cells\n")
-
-read_obs <- function(h5_path) {
-  file    <- H5File$new(h5_path, mode = "r")
-  on.exit(file$close_all())
-  obs_grp  <- file[["obs"]]
-  meta_list <- list()
-  for (col in names(obs_grp)) {
-    if (!grepl("^_", col)) {
-      tryCatch({
-        item <- obs_grp[[col]]
-        if ("categories" %in% names(item)) {
-          meta_list[[col]] <- item[["categories"]][][item[["codes"]][] + 1]
-        } else {
-          meta_list[[col]] <- item[]
-        }
-      }, error = function(e) {})
-    }
-  }
-  df <- data.frame(meta_list, stringsAsFactors = FALSE)
-  if (file$exists("obs/_index")) rownames(df) <- file[["obs/_index"]][]
-  return(df)
-}
-
-meta_data           <- read_obs(h5ad_file)
-rownames(meta_data) <- Cells(ref_seurat)
-ref_seurat          <- AddMetaData(ref_seurat, metadata = meta_data)
-
-read_var <- function(h5_path) {
-  file    <- H5File$new(h5_path, mode = "r")
-  on.exit(file$close_all())
-  var_grp  <- file[["var"]]
-  meta_list <- list()
-  for (col in names(var_grp)) {
-    if (!grepl("^_", col)) {
-      tryCatch({
-        item <- var_grp[[col]]
-        if ("categories" %in% names(item)) {
-          meta_list[[col]] <- item[["categories"]][][item[["codes"]][] + 1]
-        } else {
-          meta_list[[col]] <- item[]
-        }
-      }, error = function(e) {})
-    }
-  }
-  df <- data.frame(meta_list, stringsAsFactors = FALSE)
-  if (file$exists("var/_index")) rownames(df) <- file[["var/_index"]][]
-  return(df)
-}
-
-gene_meta    <- read_var(h5ad_file)
-current_ids  <- rownames(ref_seurat)
-if (any(grepl("^ENSG", head(current_ids)))) {
-  target_col <- ifelse("feature_name" %in% colnames(gene_meta),
-                       "feature_name", "gene_name")
-  new_names  <- gene_meta[current_ids, target_col]
-  new_names[is.na(new_names)] <- current_ids[is.na(new_names)]
-  new_names  <- make.unique(new_names)
-  rownames(ref_seurat) <- new_names
-  cat("Gene IDs converted to Symbols.\n")
-}
+# Reuse the shared reference prepared in 01_KPMP_DKD.Rmd.
+ref_seurat <- readRDS("/path/to/ref_seurat.rds")
+DefaultAssay(ref_seurat) <- "RNA"
+stopifnot("subclass.l2" %in% colnames(ref_seurat@meta.data),
+          "pca" %in% Reductions(ref_seurat))
 ```
 
 # 8. Deconvolution (KPMP Reference)
 
 ```{r deconv}
-ref_seurat <- NormalizeData(ref_seurat)
-ref_seurat <- FindVariableFeatures(ref_seurat, nfeatures = 3000)
-ref_seurat <- ScaleData(ref_seurat, features = VariableFeatures(ref_seurat))
-ref_seurat <- RunPCA(ref_seurat, verbose = FALSE)
-
-susz <- FindVariableFeatures(susz, nfeatures = 2000)
-susz <- ScaleData(susz)
-susz <- RunPCA(susz, verbose = FALSE)
-
 anchors <- FindTransferAnchors(
   reference            = ref_seurat,
-  query                = susz,
+  query                = poc,
   normalization.method = "LogNormalize",
   reference.reduction  = "pca",
+  reduction            = "pcaproject",
+  features             = VariableFeatures(ref_seurat),
   dims                 = 1:30
 )
 
 predictions <- TransferData(
   anchorset        = anchors,
   refdata          = ref_seurat$subclass.l2,
-  weight.reduction = susz[["pca"]],
+  weight.reduction = poc[["pca"]],
   dims             = 1:30
 )
 
-susz$M2Mac_fraction <- predictions[[MAC_M2_SCORE_COL]]
+# M2Mac_fraction stores a prediction score.
+poc$M2Mac_fraction <- predictions[[MAC_M2_SCORE_COL]]
 cat("M2Mac_fraction summary:\n")
-print(summary(susz$M2Mac_fraction))
+print(summary(poc$M2Mac_fraction))
 ```
 
 # 9. Fibrosis Score
 
 ```{r fibrosis_score}
-final_fib_genes_val <- intersect(FINAL_FIB_GENES_DISCOVERY, rownames(susz))
-genes_missing_val   <- setdiff(FINAL_FIB_GENES_DISCOVERY, rownames(susz))
+final_fib_genes_val <- intersect(FINAL_FIB_GENES_DISCOVERY, rownames(poc))
+genes_missing_val   <- setdiff(FINAL_FIB_GENES_DISCOVERY, rownames(poc))
 
 cat("Present:", length(final_fib_genes_val), "/",
     length(FINAL_FIB_GENES_DISCOVERY), "\n")
 if (length(genes_missing_val) > 0)
   cat("Missing:", paste(genes_missing_val, collapse = ", "), "\n")
 
-susz <- AddModuleScore(
-  susz,
+poc <- AddModuleScore(
+  poc,
   features = list(final_fib_genes_val),
   name     = "Fibrosis_Score",
+    seed     = 1,
   assay    = "Spatial"
 )
-susz$Fibrosis_Score  <- susz$Fibrosis_Score1
-susz$Fibrosis_Score1 <- NULL
+poc$Fibrosis_Score  <- poc$Fibrosis_Score1
+poc$Fibrosis_Score1 <- NULL
 ```
 
 # 10. GWR
 
 ```{r gwr}
 all_coords_list <- list()
-for (img in Images(susz)) {
-  c_data         <- GetTissueCoordinates(susz, image = img)
-  c_data$Barcode <- rownames(c_data)
+for (img in Images(poc)) {
+  c_data         <- GetTissueCoordinates(poc, image = img)
+  c_data$Barcode <- if ("cell" %in% colnames(c_data)) c_data$cell else rownames(c_data)
   all_coords_list[[img]] <- c_data
 }
 all_coords <- do.call(rbind, all_coords_list)
+stopifnot(!anyDuplicated(all_coords$Barcode),
+          all(colnames(poc) %in% all_coords$Barcode))
 
 cols  <- colnames(all_coords)
 y_col <- grep("row|y", cols, ignore.case = TRUE, value = TRUE)[1]
@@ -305,7 +267,7 @@ x_col <- grep("col|x", cols, ignore.case = TRUE, value = TRUE)[1]
 all_coords$final_x <- all_coords[[x_col]]
 all_coords$final_y <- all_coords[[y_col]]
 
-meta_df           <- susz@meta.data
+meta_df           <- poc@meta.data
 meta_df$Barcode   <- rownames(meta_df)
 meta_df$log10_UMI <- log10(meta_df$nCount_Spatial + 1)
 
@@ -364,13 +326,13 @@ cat("GWR complete:", length(gwr_results_list), "/",
 final_results           <- do.call(rbind, gwr_results_list)
 rownames(final_results) <- final_results$Barcode
 
-matched_indices <- match(rownames(susz@meta.data), final_results$Barcode)
-susz$M2_Coeff   <- final_results$M2_Coeff[matched_indices]
-susz$M2_AdjP    <- final_results$M2_AdjP[matched_indices]
-susz$M2_t_val   <- final_results$M2_t_val[matched_indices]
+matched_indices <- match(rownames(poc@meta.data), final_results$Barcode)
+poc$M2_Coeff   <- final_results$M2_Coeff[matched_indices]
+poc$M2_AdjP    <- final_results$M2_AdjP[matched_indices]
+poc$M2_t_val   <- final_results$M2_t_val[matched_indices]
 
 # count high-coupling spots
-sig_summary <- susz@meta.data %>%
+sig_summary <- poc@meta.data %>%
   filter(orig.ident %in% keep_samples) %>%
   group_by(orig.ident) %>%
   summarise(
@@ -389,8 +351,7 @@ print(sig_summary)
 # save to CSV
 timestamp_gwr <- format(Sys.time(), "%Y%m%d_%H%M%S")
 write.csv(sig_summary,
-          file.path(DIR_OUT, paste0("GWR_HighCouplingSummary_DKDonly_",
-                                    timestamp_gwr, ".csv")),
+          file.path(DIR_OUT, "GWR_HighCouplingSummary.csv"),
           row.names = FALSE)
 
 valid_samples <- sig_summary %>%
@@ -402,15 +363,15 @@ cat("Valid samples for DEG (n =", length(valid_samples), "):\n")
 print(valid_samples)
 
 # Spot_Label (3 categories: High-coupling / Reference / NA)
-susz$Spot_Label <- ifelse(
-  !is.na(susz$M2_Coeff) & 
-    susz$M2_Coeff > GWR_COEF_THRESHOLD &
-    susz$M2_AdjP  < GWR_FDR_THRESHOLD,
+poc$Spot_Label <- ifelse(
+  !is.na(poc$M2_Coeff) & 
+    poc$M2_Coeff > GWR_COEF_THRESHOLD &
+    poc$M2_AdjP  < GWR_FDR_THRESHOLD,
   "High-coupling", "Reference"
 )
-susz$Spot_Label[is.na(susz$M2_Coeff)] <- "NA"
-susz$Spot_Label <- factor(
-  susz$Spot_Label,
+poc$Spot_Label[is.na(poc$M2_Coeff)] <- "NA"
+poc$Spot_Label <- factor(
+  poc$Spot_Label,
   levels = c("High-coupling", "Reference", "NA")
 )
 ```
@@ -418,37 +379,32 @@ susz$Spot_Label <- factor(
 # 12. Pseudo-bulk DEG (edgeR) — NA-safe Version
 
 ```{r deg}
-# early exit if valid_samples is empty
-if (length(valid_samples) == 0) {
-  cat("\nWARNING: valid_samples is empty.\n")
-  cat("Consider relaxing MIN_HIGHCOUPLING_SPOTS / MIN_REFERENCE_SPOTS,\n")
-  cat("or skip DEG analysis and produce only the spatial plots.\n")
-  knitr::knit_exit()
-}
+# Require at least two paired samples.
+if (length(valid_samples) < 2) stop("Fewer than two eligible paired samples.")
 
 # restrict to GWR-evaluable spots (NA-safe)
-target_barcodes <- colnames(susz)[
-  susz$orig.ident %in% valid_samples &
-  !is.na(susz$M2_Coeff) &
-  !is.na(susz$M2_AdjP)
+target_barcodes <- colnames(poc)[
+  poc$orig.ident %in% valid_samples &
+  !is.na(poc$M2_Coeff) &
+  !is.na(poc$M2_AdjP)
 ]
 
 cat("Spots retained for DEG:", length(target_barcodes), "\n")
 cat("Any NA in M2_Coeff?: ",
-    any(is.na(susz$M2_Coeff[target_barcodes])), "\n")
+    any(is.na(poc$M2_Coeff[target_barcodes])), "\n")
 cat("Any NA in M2_AdjP?:  ",
-    any(is.na(susz$M2_AdjP[target_barcodes])), "\n")
+    any(is.na(poc$M2_AdjP[target_barcodes])), "\n")
 
 # pseudo_group (built from target_barcodes only)
 # not using AggregateExpression, but use "-" separators to match KPMP
 coupling_labels <- ifelse(
-  susz$M2_Coeff[target_barcodes] > GWR_COEF_THRESHOLD &
-  susz$M2_AdjP[target_barcodes]  < GWR_FDR_THRESHOLD,
+  poc$M2_Coeff[target_barcodes] > GWR_COEF_THRESHOLD &
+  poc$M2_AdjP[target_barcodes]  < GWR_FDR_THRESHOLD,
   "HighCoupling",
   "Reference"
 )
 pg_labels <- paste(
-  susz$orig.ident[target_barcodes],
+  poc$orig.ident[target_barcodes],
   coupling_labels,
   sep = "-"
 )
@@ -462,26 +418,26 @@ cat("=== Coupling Label counts ===\n")
 print(table(coupling_labels))
 
 # build pseudobulk counts (manual sapply approach)
-# Susztak analysis uses SCT counts (same as discovery)
-counts_raw_sct <- GetAssayData(susz, assay = "SCT", layer = "counts")
-counts_sub_sct <- counts_raw_sct[, target_barcodes]
+# Use unnormalized UMI counts for pseudobulk aggregation.
+counts_raw <- GetAssayData(poc, assay = "Spatial", layer = "counts")
+counts_sub <- counts_raw[, target_barcodes]
 
 groups <- sort(unique(pg_labels))
-counts_matrix_sct <- sapply(groups, function(g) {
+counts_matrix <- sapply(groups, function(g) {
   bc <- target_barcodes[pg_labels == g]
-  Matrix::rowSums(counts_sub_sct[, bc, drop = FALSE])
+  Matrix::rowSums(counts_sub[, bc, drop = FALSE])
 })
 
-cat("Pseudo-bulk matrix:", nrow(counts_matrix_sct), "×",
-    ncol(counts_matrix_sct), "\n")
+cat("Pseudo-bulk matrix:", nrow(counts_matrix), "×",
+    ncol(counts_matrix), "\n")
 
-cat("--- counts_matrix_sct columns ---\n")
-print(colnames(counts_matrix_sct))
+cat("--- counts_matrix columns ---\n")
+print(colnames(counts_matrix))
 
 # check for unexpected columns
-unexpected_cols <- colnames(counts_matrix_sct)[
-  !grepl("-HighCoupling$", colnames(counts_matrix_sct)) &
-  !grepl("-Reference$",    colnames(counts_matrix_sct))
+unexpected_cols <- colnames(counts_matrix)[
+  !grepl("-HighCoupling$", colnames(counts_matrix)) &
+  !grepl("-Reference$",    colnames(counts_matrix))
 ]
 if (length(unexpected_cols) > 0) {
   stop(
@@ -491,7 +447,7 @@ if (length(unexpected_cols) > 0) {
 }
 
 # targets metadata
-sample_names_pb <- colnames(counts_matrix_sct)
+sample_names_pb <- colnames(counts_matrix)
 conditions <- ifelse(
   grepl("-HighCoupling$", sample_names_pb), "HighCoupling",
   ifelse(grepl("-Reference$", sample_names_pb), "Reference", NA)
@@ -526,16 +482,13 @@ if (any(rowSums(pair_tab > 0) < 2)) {
 }
 
 # edgeR
-keep_genes  <- rowSums(counts_matrix_sct >= 10) >= 2
-counts_filt <- counts_matrix_sct[keep_genes, ]
-cat("Genes after filtering:", nrow(counts_filt), "\n")
 
 design <- model.matrix(~ SampleID + Condition, data = targets)
 cat("--- design matrix colnames ---\n")
 print(colnames(design))
 cat("Degrees of freedom:", nrow(targets) - ncol(design), "\n")
 
-y   <- DGEList(counts = counts_filt, group = targets$Condition)
+y   <- DGEList(counts = counts_matrix, group = targets$Condition)
 y   <- calcNormFactors(y)
 y   <- estimateDisp(y, design, robust = TRUE)
 fit <- glmQLFit(y, design, robust = TRUE)
@@ -557,14 +510,19 @@ timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 write.csv(
   all_results,
   file.path(DIR_OUT,
-            paste0("EdgeR_HighCoupling_vs_Reference_all_DKDonly_",
-                   timestamp, ".csv"))
+            "EdgeR_HighCoupling_vs_Reference_all.csv")
 )
 write.csv(
   sig_genes,
   file.path(DIR_OUT,
-            paste0("EdgeR_HighCoupling_vs_Reference_FDR0.05_DKDonly_",
-                   timestamp, ".csv"))
+            "EdgeR_HighCoupling_vs_Reference_FDR0.05.csv")
 )
 cat("Saved to:", DIR_OUT, "\n")
+
+# Save the analysis object and eligibility information for figure scripts.
+poc@misc$valid_samples <- valid_samples
+saveRDS(poc, file.path(DIR_OUT, "PoC_analysis.rds"))
+write.csv(sig_summary, file.path(DIR_OUT, "GWR_HighCouplingSummary.csv"), row.names = FALSE)
+write.csv(data.frame(SampleID = valid_samples), file.path(DIR_OUT, "DEG_samples.csv"), row.names = FALSE)
+capture.output(sessionInfo(), file = file.path(DIR_OUT, "sessionInfo.txt"))
 ```

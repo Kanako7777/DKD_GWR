@@ -23,10 +23,10 @@ figures/    Figure and enrichment code (reads the saved analysis outputs)
   Fig1B_cohort_flow.Rmd      Cohort/sample flow diagram (Figure 1B)
   spatial_plots.Rmd          Per-spot M2/fibrosis/GWR/high-coupling maps
                              (Figures 2-3, 5 and Supplementary Figures S1-S5)
-  volcano_plots.Rmd          Pseudobulk DEG volcano plots (Figures 2 and 4A)
+  volcano_plots.Rmd          Pseudobulk DEG volcano plots
   GO_GSEA_enrichment.Rmd     GO BP and GSEA Hallmark (Figure 4B-D;
                              Supplementary Tables S4-S5)
-  Table2_HKD_genes.Rmd       KPMP HKD DEG table (Table 2)
+  HKD_DEG_table.Rmd          KPMP HKD DEG table
 
 data/       Place input data here (not distributed; see data/README.md)
 ```

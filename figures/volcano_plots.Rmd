@@ -17,11 +17,11 @@ merged_hkd <- readRDS("/path/to/HKD_results/HKD_analysis.rds")
 
 
 
-```{r Figure 2B Volcano_Plot}
+```{r PoC_DKD_volcano}
 #   - Universal-design palette (CVD-safe)
 #   - built from any DEG CSV (all_results)
 #   - labels the top N up- and down-regulated genes
-#   - reusable for PoC DKD (Fig 2B), KPMP DKD (Fig 3A), and HKD
+#   - reusable for PoC DKD, KPMP DKD, and HKD
 
 library(ggplot2)
 library(ggrepel)
@@ -169,11 +169,11 @@ create_volcano_plot <- function(csv_path,
 
 # Examples
 
-# ---- Fig 2B: PoC DKD Proof-of-Concept ----
+# ---- PoC DKD volcano plot ----
 p_poc <- create_volcano_plot(
   csv_path      = "/path/to/PoC_results/EdgeR_HighCoupling_vs_Reference_all.csv",
   output_dir    = "/path/to/Volcano_figures",
-  filename_base = "Figure_2B_Volcano_PoC_DKD",
+  filename_base = "PoC_DKD_volcano",
   title_text    = "Proof-of-Concept Cohort (n = 4 paired samples)",
   label_top_n   = 10,
   label_lfc_min = 0.5
@@ -182,7 +182,7 @@ print(p_poc)
 ```
 
 
-```{r Figure 4A Volcano_Plot}
+```{r KPMP_DKD_volcano}
 ### Y-axis cap because DES is an outlier
 
 create_volcano_plot <- function(csv_path,
@@ -332,7 +332,7 @@ create_volcano_plot <- function(csv_path,
 p_kpmp_dkd <- create_volcano_plot(
   csv_path      = "/path/to/DKD_results/EdgeR_HighCoupling_vs_Reference_all.csv",
   output_dir    = "/path/to/Volcano_figures",
-  filename_base = "Figure_4A_Volcano_KPMP_DKD",
+  filename_base = "KPMP_DKD_volcano",
   title_text    = "KPMP DKD Cohort (n = 15 paired samples)",
   label_top_n   = 5,
   y_cap         = 8.5      # added
@@ -344,8 +344,8 @@ print(p_kpmp_dkd)
 
 
 
-```{r Figure_4_KPMP_DKD_Spatial_v8}
-# Figure 4: KPMP DKD Spatial Plot v8
+```{r KPMP_DKD_Spatial_v8}
+# KPMP DKD Spatial Plot v8
 #   - VisiumV2 support (x/y swap)
 #   - auto rescale (fullres -> lowres)
 #   - DOT_SIZE = 2.0 (dense spots)
@@ -560,8 +560,8 @@ cat("Saved in:", out_dir, "\n")
 ```
 
 
-```{r **Figure_5_KPMP_HKD_Spatial_v8_FIXROTATION**}
-# Figure 5: KPMP HKD Spatial Plot v8 (image orientation)
+```{r KPMP_HKD_Spatial_v8}
+# KPMP HKD Spatial Plot v8 (image orientation)
 #   - adds VisiumV2 x/y swap to v7
 #   - VisiumV2: x = pixel_row (vertical), y = pixel_col (horizontal)
 
@@ -768,7 +768,7 @@ for (target_sample in valid_samples) {
 
 
 ```{r KPMP DKD Spatial Plot}
-# Figure 4: KPMP DKD Spatial Plot
+# KPMP DKD Spatial Plot
 library(Seurat)
 library(ggplot2)
 library(patchwork)

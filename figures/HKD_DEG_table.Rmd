@@ -1,5 +1,5 @@
 ---
-title: "Table 2"
+title: "KPMP HKD differentially expressed genes"
 author: "Kanako Terakawa"
 output: html_document
 ---
@@ -17,7 +17,6 @@ library(dplyr)
 create_deg_table <- function(csv_path,                    # CSV of significant genes (rownames = gene)
                              output_dir,
                              filename_base,                # output filename (no extension)
-                             figure_label = "Table 1",
                              title_text   = NULL,
                              cohort_label = "KPMP HKD cohort",
                              footer_text  = NULL,
@@ -89,7 +88,7 @@ create_deg_table <- function(csv_path,                    # CSV of significant g
     cols_align(align = "right", columns = c("logFC", "FDR")) %>%
     cols_align(align = "left",  columns = "gene") %>%
     tab_header(
-      title = md(sprintf("**%s.** %s — %s", figure_label, title_text, cohort_label))
+      title = md(sprintf("%s — %s", title_text, cohort_label))
     ) %>%
     tab_source_note(source_note = footer_text) %>%
     tab_style(
@@ -189,12 +188,11 @@ create_deg_table <- function(csv_path,                    # CSV of significant g
   return(gt_tbl)
 }
 
-# Example: KPMP HKD (Table 2)
+# Example: KPMP HKD DEG table
 gt_hkd <- create_deg_table(
   csv_path      = "/path/to/KPMP_DKD_ST_project/analysis_for_paper/KPMP/HKD/EdgeR_HighCoupling_vs_Reference_FDR0.05_HKD_20260512_154220.csv",
   output_dir    = "/path/to/KPMP_DKD_ST_project/figures_for_paper/Tables/",
-  filename_base = "Table_2_HKD_genes_table",
-  figure_label  = "Table 2",
+  filename_base = "KPMP_HKD_DEG_table",
   cohort_label  = "KPMP HKD cohort",
   footer_text   = "log\u2082FC indicates HighCoupling / Reference. Pseudo-bulk DGE by edgeR with paired design (~ SampleID + Condition), n = 9 paired samples."
 )

@@ -18,8 +18,8 @@ poc <- readRDS("/path/to/PoC_results/PoC_analysis.rds")
 
 
 
-```{r Fig2A-D_panels}
-# Fig2A-D Spatial 4-panel plot
+```{r PoC_DKD_spatial_panels}
+# PoC DKD spatial 4-panel plot
 # Proof-of-concept cohort
 # H&E background + spatial spots
 
@@ -485,8 +485,8 @@ for (target_sample in valid_samples) {
 }
 ```
 
-```{r Figure_4_KPMP_DKD_Spatial_v11}
-# Figure 4: KPMP DKD Spatial Plot v11
+```{r KPMP_DKD_spatial}
+# KPMP DKD spatial plots
 #   Base: v9 working script
 #   - Keeps VisiumV2 x/y swap + auto-rescale
 #   - Keeps H&E background and adaptive 2x2 / 1x4 layout
@@ -1061,12 +1061,12 @@ cat("\nDone. KPMP DKD cohort.\n")
 cat("Saved in:", out_dir, "\n")
 ```
 
-```{r Figure_4_KPMP_DKD_Spatial_v12_legendTitle}
-# Figure 4: KPMP DKD Spatial Plot v12
+```{r KPMP_DKD_spatial_legend_titles}
+# KPMP DKD spatial plots with legend titles
 #   Base: v9 working script
 #   - Keeps VisiumV2 x/y swap + auto-rescale
 #   - Keeps H&E background and adaptive 2x2 / 1x4 layout
-#   - Adds legend titles, following Fig2A-D style
+#   - Adds legend titles, following PoC spatial plot style
 #   - Optional panel titles
 #   - Larger Arial legends
 #   - Visible NA legend circle
@@ -1650,7 +1650,7 @@ cat("Saved in:", out_dir, "\n")
 ```
 
 ```{r KPMP HKD}
-# Figure 5: KPMP HKD Spatial Plot - styled (matched to PoC)
+# KPMP HKD Spatial Plot - styled (matched to PoC)
 #   - keeps VisiumV2 x/y swap + auto-rescale
 #   - PoC style: toggle / Arial / large legend / NA outline / enlarged colorbar / timestamp
 #   - 9 samples (passing the DEG threshold)
